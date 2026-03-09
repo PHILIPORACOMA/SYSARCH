@@ -1,4 +1,64 @@
 <!DOCTYPE html>
+<?php
+// Database connection
+$servername = "localhost";
+$username = "root";
+$password = "";
+$dbname = "students";
+
+$conn = new mysqli($servername, $username, $password, $dbname);
+
+if ($conn->connect_error) {
+    die("Connection failed: " . $conn->connect_error);
+}
+
+// Handle form submission
+if ($_SERVER["REQUEST_METHOD"] == "POST") {
+    $id_number = $_POST['id_number'];
+    $last_name = $_POST['last_name'];
+    $first_name = $_POST['first_name'];
+    $middle_name = $_POST['middle_name'];
+    $course_level = (int)$_POST['course_level'];
+    $password = password_hash($_POST['password'], PASSWORD_DEFAULT);
+    $confirm_password = $_POST['confirm_password'];
+    $email = $_POST['email'];
+    $course = $_POST['course'];
+    $address = $_POST['address'];
+
+    // Basic validation
+    if ($_POST['password'] !== $confirm_password) {
+        $error = "Passwords do not match!";
+    } elseif (empty($id_number) || empty($last_name) || empty($first_name) || empty($course_level) || empty($_POST['password']) || empty($email) || empty($course) || empty($address)) {
+        $error = "All required fields must be filled!";
+    } else {
+        // Check if ID number or email already exists
+        $check_sql = "SELECT IdNumber FROM studentinfo WHERE IdNumber = ? OR Email = ?";
+        $check_stmt = $conn->prepare($check_sql);
+        $check_stmt->bind_param("ss", $id_number, $email);
+        $check_stmt->execute();
+        $check_result = $check_stmt->get_result();
+
+        if ($check_result->num_rows > 0) {
+            $error = "ID Number or Email already exists!";
+        } else {
+            // Insert new student
+            $sql = "INSERT INTO studentinfo (IdNumber, LastName, FirstName, MiddleName, CourseLevel, Password, Email, Course, Address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            $stmt = $conn->prepare($sql);
+            $stmt->bind_param("ssssissss", $id_number, $last_name, $first_name, $middle_name, $course_level, $password, $email, $course, $address);
+
+            if ($stmt->execute()) {
+                $success = "Registration successful! You can now login.";
+            } else {
+                $error = "Error: " . $stmt->error;
+            }
+            $stmt->close();
+        }
+        $check_stmt->close();
+    }
+}
+
+$conn->close();
+?>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -58,38 +118,51 @@
                             <button class="btn-back mb-3">Back</button>
                             <h2 class="fw-bold mb-4">Sign up</h2>
                             
+                            <?php if (isset($error)): ?>
+                                <div class="alert alert-danger"><?php echo $error; ?></div>
+                            <?php endif; ?>
+                            <?php if (isset($success)): ?>
+                                <div class="alert alert-success"><?php echo $success; ?></div>
+                            <?php endif; ?>
+                            
                             <form action="" method="POST">
                                 <div class="mb-2">
-                                    <input type="text" class="form-control" placeholder="ID Number">
+                                    <input type="text" name="id_number" class="form-control" placeholder="ID Number" required>
                                 </div>
                                 <div class="mb-2">
-                                    <input type="text" class="form-control" placeholder="Last Name">
+                                    <input type="text" name="last_name" class="form-control" placeholder="Last Name" required>
                                 </div>
                                 <div class="mb-2">
-                                    <input type="text" class="form-control" placeholder="First Name">
+                                    <input type="text" name="first_name" class="form-control" placeholder="First Name" required>
                                 </div>
                                 <div class="mb-2">
-                                    <input type="text" class="form-control" placeholder="Middle Name">
+                                    <input type="text" name="middle_name" class="form-control" placeholder="Middle Name">
                                 </div>
                                 <div class="mb-2">
                                     <label class="form-label-sm">Course Level</label>
-                                    <input type="text" class="form-control" placeholder="Course Level   ">
+                                    <select name="course_level" class="form-control" required>
+                                        <option value="">Select Course Level</option>
+                                        <option value="1">1st Year</option>
+                                        <option value="2">2nd Year</option>
+                                        <option value="3">3rd Year</option>
+                                        <option value="4">4th Year</option>
+                                    </select>
                                 </div>
                                 <div class="mb-2">
-                                    <input type="password" class="form-control" placeholder="Password">
+                                    <input type="password" name="password" class="form-control" placeholder="Password" required>
                                 </div>
                                 <div class="mb-2">
-                                    <input type="password" class="form-control" placeholder="Repeat your password">
+                                    <input type="password" name="confirm_password" class="form-control" placeholder="Repeat your password" required>
                                 </div>
                                 <div class="mb-2">
-                                    <input type="email" class="form-control" placeholder="Email">
+                                    <input type="email" name="email" class="form-control" placeholder="Email" required>
                                 </div>
                                 <div class="mb-2">
                                     <label class="form-label-sm">Course</label>
-                                    <input type="text" class="form-control" placeholder="Course">
+                                    <input type="text" name="course" class="form-control" placeholder="Course" required>
                                 </div>
                                 <div class="mb-3">
-                                    <input type="text" class="form-control" placeholder="Address">
+                                    <input type="text" name="address" class="form-control" placeholder="Address" required>
                                 </div>
                                 
                                 <button type="submit" class="btn btn-primary px-4 py-1 buttonReg" style="color:black;">Register</button>
