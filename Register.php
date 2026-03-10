@@ -1,10 +1,9 @@
-<!DOCTYPE html>
 <?php
 // Database connection
 $servername = "localhost";
 $username = "root";
 $password = "";
-$dbname = "students";
+$dbname = "sysarchstudents";
 
 $conn = new mysqli($servername, $username, $password, $dbname);
 
@@ -13,7 +12,7 @@ if ($conn->connect_error) {
 }
 
 // Handle form submission
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
+if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] == "POST") {
     $id_number = $_POST['id_number'];
     $last_name = $_POST['last_name'];
     $first_name = $_POST['first_name'];
@@ -32,7 +31,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         $error = "All required fields must be filled!";
     } else {
         // Check if ID number or email already exists
-        $check_sql = "SELECT IdNumber FROM studentinfo WHERE IdNumber = ? OR Email = ?";
+        $check_sql = "SELECT IdNumber FROM students_info WHERE IdNumber = ? OR Email = ?";
         $check_stmt = $conn->prepare($check_sql);
         $check_stmt->bind_param("ss", $id_number, $email);
         $check_stmt->execute();
@@ -42,7 +41,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             $error = "ID Number or Email already exists!";
         } else {
             // Insert new student
-            $sql = "INSERT INTO studentinfo (IdNumber, LastName, FirstName, MiddleName, CourseLevel, Password, Email, Course, Address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            $sql = "INSERT INTO students_info (IdNumber, LastName, FirstName, MiddleName, CourseLevel, Password, Email, Course, Address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
             $stmt = $conn->prepare($sql);
             $stmt->bind_param("ssssissss", $id_number, $last_name, $first_name, $middle_name, $course_level, $password, $email, $course, $address);
 
@@ -59,6 +58,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
 $conn->close();
 ?>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">

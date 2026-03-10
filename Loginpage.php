@@ -1,4 +1,3 @@
-<!DOCTYPE html>
 <?php
 session_start();
 
@@ -6,7 +5,7 @@ session_start();
 $login_success = isset($_SESSION['login_success']) && $_SESSION['login_success'];
 
 // Clear the success flag for future requests
-if ($_SERVER["REQUEST_METHOD"] !== "POST") {
+if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] !== "POST") {
     unset($_SESSION['login_success']);
 }
 
@@ -14,7 +13,7 @@ if ($_SERVER["REQUEST_METHOD"] !== "POST") {
 $servername = "localhost";
 $username = "root";
 $password = "";
-$dbname = "students";
+$dbname = "sysarchstudents";
 
 $conn = new mysqli($servername, $username, $password, $dbname);
 
@@ -23,12 +22,12 @@ if ($conn->connect_error) {
 }
 
 // Handle form submission
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
+if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] == "POST") {
     $email = $_POST['email'];
     $password = $_POST['password'];
 
     // Get user from database
-    $sql = "SELECT IdNumber, Password, FirstName, LastName FROM studentinfo WHERE Email = ?";
+    $sql = "SELECT IdNumber, Password, FirstName, LastName FROM students_info WHERE Email = ?";
     $stmt = $conn->prepare($sql);
     $stmt->bind_param("s", $email);
     $stmt->execute();
@@ -56,6 +55,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
 $conn->close();
 ?>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
