@@ -4,10 +4,7 @@ session_start();
 // Check if we just had a successful login
 $login_success = isset($_SESSION['login_success']) && $_SESSION['login_success'];
 
-// Clear the success flag for future requests
-if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] !== "POST") {
-    unset($_SESSION['login_success']);
-}
+// Clear the success flag for future requests - removed to keep message on refresh
 
 // Database connection
 $servername = "localhost";
@@ -120,6 +117,42 @@ $conn->close();
     </nav>
 
     <div class="container">
+        <?php if ($login_success): ?>
+        <!-- Welcome Section -->
+        <div class="row justify-content-center align-items-center" style="min-height: 60vh;">
+            <div class="col-lg-8">
+                <div class="card welcome-card p-5 text-center">
+                    <div class="card-body">
+                        <i class="fas fa-check-circle success-icon"></i>
+                        <h1 class="welcome-text mb-3">Login Successful!</h1>
+                        <h3 class="mb-4">Welcome, <?php echo htmlspecialchars($_SESSION['user_name']); ?>!</h3>
+                        <p class="lead mb-4">You have successfully logged into the College of Computer Studies Sit-in Monitoring System.</p>
+                        
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="card border-0 shadow-sm mb-3">
+                                    <div class="card-body">
+                                        <h5 class="card-title">Your ID Number</h5>
+                                        <p class="card-text fs-4 text-primary"><?php echo htmlspecialchars($_SESSION['user_id']); ?></p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card border-0 shadow-sm mb-3">
+                                    <div class="card-body">
+                                        <h5 class="card-title">Quick Actions</h5>
+                                        <a href="Landingpage.php" class="btn btn-outline-primary me-2">Go to Home</a>
+                                        <a href="logout.php" class="btn btn-outline-secondary">Logout</a>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <?php else: ?>
+        <!-- Login Form -->
         <div class="row justify-content-center">
             <div class="col-lg-10">
                 <div class="modal-container">
@@ -161,42 +194,6 @@ $conn->close();
                 </div>
             </div>
         </div>
-
-        <?php if (isset($login_success) && $login_success): ?>
-        <section class="mt-5">
-            <div class="row justify-content-center">
-                <div class="col-lg-8">
-                    <div class="card welcome-card p-5 text-center">
-                        <div class="card-body">
-                            <i class="fas fa-check-circle success-icon"></i>
-                            <h1 class="welcome-text mb-3">Login Successful!</h1>
-                            <h3 class="mb-4">Welcome, <?php echo htmlspecialchars($_SESSION['user_name']); ?>!</h3>
-                            <p class="lead mb-4">You have successfully logged into the College of Computer Studies Sit-in Monitoring System.</p>
-                            
-                            <div class="row">
-                                <div class="col-md-6">
-                                    <div class="card border-0 shadow-sm mb-3">
-                                        <div class="card-body">
-                                            <h5 class="card-title">Your ID Number</h5>
-                                            <p class="card-text fs-4 text-primary"><?php echo htmlspecialchars($_SESSION['user_id']); ?></p>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="col-md-6">
-                                    <div class="card border-0 shadow-sm mb-3">
-                                        <div class="card-body">
-                                            <h5 class="card-title">Quick Actions</h5>
-                                            <a href="Landingpage.php" class="btn btn-outline-primary me-2">Go to Home</a>
-                                            <a href="logout.php" class="btn btn-outline-secondary">Logout</a>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </section>
         <?php endif; ?>
     </div>
 
