@@ -159,7 +159,27 @@ $conn->close();
                                 </div>
                                 <div class="mb-2">
                                     <label class="form-label-sm">Course</label>
-                                    <input type="text" name="course" class="form-control" placeholder="Course" required>
+                                    <select name="course" class="form-control" required>
+                                        <option value="">Select Course</option>
+                                        <option value="Information Technology">Information Technology</option>
+                                        <option value="Computer Engineering">Computer Engineering</option>
+                                        <option value="Civil Engineering">Civil Engineering</option>
+                                        <option value="Mechanical Engineering">Mechanical Engineering</option>
+                                        <option value="Electrical Engineering">Electrical Engineering</option>
+                                        <option value="Industrial Engineering">Industrial Engineering</option>
+                                        <option value="Naval Architecture and Marine Engineering">Naval Architecture and Marine Engineering</option>
+                                        <option value="Elementary Education (BEEd)">Elementary Education (BEEd)</option>
+                                        <option value="Secondary Education (BSEd)">Secondary Education (BSEd)</option>
+                                        <option value="Criminology">Criminology</option>
+                                        <option value="Commerce">Commerce</option>
+                                        <option value="Accountancy">Accountancy</option>
+                                        <option value="Hotel and Restaurant Management">Hotel and Restaurant Management</option>
+                                        <option value="Customs Administration">Customs Administration</option>
+                                        <option value="Computer Secretarial">Computer Secretarial</option>
+                                        <option value="Industrial Psychology">Industrial Psychology</option>
+                                        <option value="AB Political Science">AB Political Science</option>
+                                        <option value="AB English">AB English</option>
+                                    </select>
                                 </div>
                                 <div class="mb-3">
                                     <input type="text" name="address" class="form-control" placeholder="Address" required>
