@@ -4,8 +4,6 @@ session_start();
 // Check if we just had a successful login
 $login_success = isset($_SESSION['login_success']) && $_SESSION['login_success'];
 
-// Clear the success flag for future requests - removed to keep message on refresh
-
 // Database connection
 $servername = "localhost";
 $username = "root";
@@ -30,23 +28,26 @@ if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] == "POST") {
     $stmt->execute();
     $result = $stmt->get_result();
 
-    if ($result->num_rows == 1) {
-        $user = $result->fetch_assoc();
-        if (password_verify($password, $user['Password'])) {
-            // Login successful - set session and success flag
-            $_SESSION['user_id'] = $user['IdNumber'];
-            $_SESSION['user_name'] = $user['FirstName'] . ' ' . $user['LastName'];
-            $_SESSION['login_success'] = true;
-            $login_success = true;
-            $logged_in_user = $user;
-        } else {
-            $error = "Invalid password!";
-            $debug_message = "Password verification failed";
-        }
+    // FIX 1: Fetch the user row before using it
+    $user = $result->fetch_assoc();
+
+    // FIX 2: Check if user exists before calling password_verify
+    if ($user && password_verify($password, $user['Password'])) {
+
+        session_regenerate_id(true);
+
+        $_SESSION['user_id']   = $user['IdNumber'];
+        $_SESSION['user_name'] = $user['FirstName'] . ' ' . $user['LastName'];
+        $_SESSION['login_success'] = true;
+
+        header("Location: student_dashboard.php");
+        exit();
+
     } else {
-        $error = "Email not found!";
-        $debug_message = "User not found";
+        // FIX 3: Set $error so the alert shows in the form
+        $error = "Invalid email or password.";
     }
+
     $stmt->close();
 }
 
@@ -163,7 +164,7 @@ $conn->close();
                             <h2 class="fw-bold mb-4">Login</h2>
                             
                             <?php if (isset($error)): ?>
-                                <div class="alert alert-danger"><?php echo $error; ?></div>
+                                <div class="alert alert-danger"><?php echo htmlspecialchars($error); ?></div>
                             <?php endif; ?>
                             
                             <form action="" method="POST">
@@ -198,6 +199,6 @@ $conn->close();
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/js/all.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 </body>
-</html>     
+</html>
