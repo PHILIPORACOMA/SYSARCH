@@ -9,7 +9,7 @@ if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] == "POST") {
     $email    = $_POST['email'];
     $password = $_POST['password'];
 
-    $sql  = "SELECT IdNumber, Password, FirstName, LastName FROM students_info WHERE Email = ?";
+    $sql  = "SELECT IdNumber, Password, FirstName, LastName, is_admin FROM students_info WHERE Email = ?";
     $stmt = $conn->prepare($sql);
     $stmt->bind_param("s", $email);
     $stmt->execute();
@@ -21,7 +21,9 @@ if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] == "POST") {
         $_SESSION['user_id']       = $user['IdNumber'];
         $_SESSION['user_name']     = $user['FirstName'] . ' ' . $user['LastName'];
         $_SESSION['login_success'] = true;
-        header("Location: student_dashboard.php");
+        // Redirect admin to admin dashboard
+        $redirect = (!empty($user['is_admin'])) ? "admin_dashboard.php" : "student_dashboard.php";
+        header("Location: " . $redirect);
         exit();
     } else {
         $error = "Invalid email or password.";
