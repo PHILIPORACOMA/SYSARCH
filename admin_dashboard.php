@@ -113,7 +113,7 @@ if (isset($_GET['search_student'])) {
 // Approve reservation
 if (isset($_POST['approve_reservation'])) {
     $rid = (int)$_POST['res_id'];
-    $s = $conn->prepare("UPDATE sit_in_sessions SET Status='Approved' WHERE SessionID=? AND Type='Reservation'");
+    $s = $conn->prepare("UPDATE sit_in_sessions SET Status='Active' WHERE SessionID=? AND Type='Reservation'");
     $s->bind_param("i", $rid);
     $s->execute(); $s->close();
     header("Location: admin_dashboard.php?tab=reservations"); exit();
@@ -486,14 +486,32 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                             <th>Year Level</th>
                             <th>Course</th>
                             <th>Email</th>
+                            <th>Used</th>
+                            <th>Remaining</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
                     <?php
-                    $stu = $conn->query("SELECT * FROM students_info WHERE is_admin=0 ORDER BY LastName ASC");
+                    $stu = $conn->query("
+                        SELECT si.*,
+                            COALESCE(si.SessionCredits, 30) as MaxCredits,
+                            COUNT(s.SessionID) as UsedSessions
+                        FROM students_info si
+                        LEFT JOIN sit_in_sessions s
+                            ON s.StudentID = si.IdNumber
+                            AND (s.Type = 'Sit-in' OR s.Type IS NULL)
+                        WHERE si.is_admin = 0
+                        GROUP BY si.IdNumber
+                        ORDER BY si.LastName ASC
+                    ");
                     if ($stu && $stu->num_rows > 0):
                         while ($s = $stu->fetch_assoc()):
+                            $max       = (int)$s['MaxCredits'];
+                            $used      = (int)$s['UsedSessions'];
+                            $remaining = max(0, $max - $used);
+                            $pct       = $max > 0 ? round(($remaining / $max) * 100) : 0;
+                            $bar_color = $remaining > 15 ? '#198754' : ($remaining > 5 ? '#c09412' : '#dc3545');
                     ?>
                         <tr>
                             <td><?= htmlspecialchars($s['IdNumber']) ?></td>
@@ -501,6 +519,17 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                             <td>Year <?= $s['CourseLevel'] ?></td>
                             <td><?= htmlspecialchars($s['Course']) ?></td>
                             <td style="font-size:0.8rem"><?= htmlspecialchars($s['Email']) ?></td>
+                            <td>
+                                <span style="font-weight:600;color:#555;"><?= $used ?> / <?= $max ?></span>
+                            </td>
+                            <td>
+                                <div style="display:flex;align-items:center;gap:7px;min-width:90px;">
+                                    <div style="flex:1;height:7px;border-radius:4px;background:#e0e0e0;overflow:hidden;">
+                                        <div style="width:<?= $pct ?>%;height:100%;background:<?= $bar_color ?>;border-radius:4px;"></div>
+                                    </div>
+                                    <span style="font-weight:700;color:<?= $bar_color ?>;font-size:0.85rem;min-width:20px;"><?= $remaining ?></span>
+                                </div>
+                            </td>
                             <td>
                                 <button class="btn btn-sm btn-purple me-1"
                                     onclick="openEdit(
@@ -521,7 +550,7 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                             </td>
                         </tr>
                     <?php endwhile; else: ?>
-                        <tr><td colspan="6" class="text-center text-muted py-3">No students found.</td></tr>
+                        <tr><td colspan="8" class="text-center text-muted py-3">No students found.</td></tr>
                     <?php endif; ?>
                     </tbody>
                 </table>
@@ -644,9 +673,23 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
     <?php elseif ($active_tab === 'records'): ?>
 
     <div class="dash-card">
-        <div class="card-header-purple d-flex justify-content-between align-items-center">
+        <div class="card-header-purple d-flex justify-content-between align-items-center flex-wrap gap-2">
             <span><i class="fa fa-table-list me-2"></i>All Sit-in Records</span>
-            <input type="text" id="recordSearch" class="search-box" placeholder="Search..." style="width:180px;">
+            <div class="d-flex align-items-center gap-2 flex-wrap">
+                <input type="text" id="recordSearch" class="search-box" placeholder="Search..." style="width:160px;">
+                <button onclick="exportCSV()" class="btn btn-sm" style="background:#27ae60;color:white;border:none;border-radius:7px;font-size:0.78rem;padding:4px 12px;">
+                    <i class="fa fa-file-csv me-1"></i>CSV
+                </button>
+                <button onclick="exportExcel()" class="btn btn-sm" style="background:#1d6f42;color:white;border:none;border-radius:7px;font-size:0.78rem;padding:4px 12px;">
+                    <i class="fa fa-file-excel me-1"></i>Excel
+                </button>
+                <button onclick="exportPDF()" class="btn btn-sm" style="background:#c0392b;color:white;border:none;border-radius:7px;font-size:0.78rem;padding:4px 12px;">
+                    <i class="fa fa-file-pdf me-1"></i>PDF
+                </button>
+                <button onclick="printTable()" class="btn btn-sm" style="background:#555;color:white;border:none;border-radius:7px;font-size:0.78rem;padding:4px 12px;">
+                    <i class="fa fa-print me-1"></i>Print
+                </button>
+            </div>
         </div>
         <div class="card-body p-0">
             <div class="table-responsive">
@@ -1040,6 +1083,117 @@ function resetSitinForm() {
     document.getElementById('studentLookup').value = '';
     document.getElementById('searchResults').style.display = 'none';
 }
+
+/* ── Export functions ── */
+function getTableData() {
+    const rows = [];
+    const headers = [];
+    document.querySelectorAll('#recordTable thead th').forEach(th => headers.push(th.innerText.trim()));
+    rows.push(headers);
+    document.querySelectorAll('#recordTable tbody tr').forEach(tr => {
+        if (tr.style.display === 'none') return; // skip filtered rows
+        const row = [];
+        tr.querySelectorAll('td').forEach(td => row.push(td.innerText.trim()));
+        rows.push(row);
+    });
+    return rows;
+}
+
+function exportCSV() {
+    const rows = getTableData();
+    const csv  = rows.map(r => r.map(c => '"' + c.replace(/"/g,'""') + '"').join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const a    = document.createElement('a');
+    a.href     = URL.createObjectURL(blob);
+    a.download = 'sitin_records.csv';
+    a.click();
+}
+
+function exportExcel() {
+    const rows = getTableData();
+    const xmlDecl = '<' + '?xml version="1.0"?' + '>';
+    let xml = xmlDecl + '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">';
+    xml += '<Worksheet ss:Name="Sit-in Records"><Table>';
+    rows.forEach(function(row) {
+        xml += '<Row>';
+        row.forEach(function(cell) {
+            const safe = cell.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            xml += '<Cell><Data ss:Type="String">' + safe + '</Data></Cell>';
+        });
+        xml += '</Row>';
+    });
+    xml += '</Table></Worksheet></Workbook>';
+    const blob = new Blob([xml], { type: 'application/vnd.ms-excel' });
+    const a    = document.createElement('a');
+    a.href     = URL.createObjectURL(blob);
+    a.download = 'sitin_records.xls';
+    a.click();
+}
+
+function exportPDF() {
+    const rows   = getTableData();
+    const win    = window.open('', '_blank');
+    const headers= rows[0];
+    const body   = rows.slice(1);
+    let html = `
+        <html><head><title>Sit-in Records</title>
+        <style>
+            body { font-family: Arial, sans-serif; font-size: 11px; margin: 20px; }
+            h2   { color: #5c2b7a; margin-bottom: 4px; }
+            p    { color: #999; font-size: 10px; margin-bottom: 12px; }
+            table{ width:100%; border-collapse:collapse; }
+            th   { background:#5c2b7a; color:white; padding:6px 8px; text-align:left; font-size:10px; }
+            td   { padding:5px 8px; border-bottom:1px solid #eee; font-size:10px; }
+            tr:nth-child(even) td { background:#f8f4fc; }
+        </style></head><body>
+        <h2>CCS Sit-in Records</h2>
+        <p>University of Cebu &mdash; College of Computer Studies &mdash; Generated: ${new Date().toLocaleString()}</p>
+        <table><thead><tr>`;
+    headers.forEach(h => html += `<th>${h}</th>`);
+    html += '</tr></thead><tbody>';
+    body.forEach(row => {
+        html += '<tr>';
+        row.forEach(cell => html += `<td>${cell}</td>`);
+        html += '</tr>';
+    });
+    html += '</tbody></table></body></html>';
+    win.document.write(html);
+    win.document.close();
+    win.onload = () => { win.print(); };
+}
+
+function printTable() {
+    const rows   = getTableData();
+    const headers= rows[0];
+    const body   = rows.slice(1);
+    let html = `
+        <html><head><title>Print - Sit-in Records</title>
+        <style>
+            body { font-family: Arial, sans-serif; font-size: 11px; margin: 20px; }
+            h2   { color: #5c2b7a; margin-bottom: 4px; }
+            p    { color: #999; font-size: 10px; margin-bottom: 12px; }
+            table{ width:100%; border-collapse:collapse; }
+            th   { background:#5c2b7a; color:white; padding:6px 8px; text-align:left; font-size:10px; }
+            td   { padding:5px 8px; border-bottom:1px solid #eee; font-size:10px; }
+            tr:nth-child(even) td { background:#f8f4fc; }
+            @media print { body { margin:0; } }
+        </style></head><body>
+        <h2>CCS Sit-in Records</h2>
+        <p>University of Cebu &mdash; College of Computer Studies &mdash; Printed: ${new Date().toLocaleString()}</p>
+        <table><thead><tr>`;
+    headers.forEach(h => html += `<th>${h}</th>`);
+    html += '</tr></thead><tbody>';
+    body.forEach(row => {
+        html += '<tr>';
+        row.forEach(cell => html += `<td>${cell}</td>`);
+        html += '</tr>';
+    });
+    html += '</tbody></table></body></html>';
+    const win = window.open('', '_blank');
+    win.document.write(html);
+    win.document.close();
+    win.onload = () => { win.print(); win.close(); };
+}
 </script>
 </body>
-</html>         
+</html>
