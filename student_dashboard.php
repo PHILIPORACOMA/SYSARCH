@@ -71,6 +71,23 @@ $stmt->execute();
 $student = $stmt->get_result()->fetch_assoc();
 $stmt->close();
 
+/* ── Unread notifications count ── */
+$unread_stmt = $conn->prepare("SELECT COUNT(*) as c FROM notifications WHERE StudentID=? AND IsRead=0");
+$unread_stmt->bind_param("s", $id);
+$unread_stmt->execute();
+$unread_count = $unread_stmt->get_result()->fetch_assoc()['c'];
+$unread_stmt->close();
+
+/* ── Mark notifications as read when modal opened ── */
+if (isset($_POST['mark_notifications_read'])) {
+    $conn->prepare("UPDATE notifications SET IsRead=1 WHERE StudentID=?")->bind_param("s", $id);
+    $upd = $conn->prepare("UPDATE notifications SET IsRead=1 WHERE StudentID=?");
+    $upd->bind_param("s", $id);
+    $upd->execute(); $upd->close();
+    echo json_encode(['status' => 'ok']);
+    exit();
+}
+
 /* ── Session credits ── */
 $used_sessions   = $conn->query("SELECT COUNT(*) as c FROM sit_in_sessions WHERE StudentID='".mysqli_real_escape_string($conn,$id)."' AND (Type='Sit-in' OR Type IS NULL)")->fetch_assoc()['c'];
 $max_credits     = isset($student['SessionCredits']) ? (int)$student['SessionCredits'] : 30;
@@ -271,8 +288,14 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
                             <a href="#" class="btn-action btn-action-edit" data-bs-toggle="modal" data-bs-target="#editProfileModal">
                                 <i class="fa fa-pen-to-square"></i>Edit Profile
                             </a>
-                            <a href="#" class="btn-action btn-action-notif" data-bs-toggle="modal" data-bs-target="#notificationsModal">
-                                <i class="fa fa-bell"></i>Notifications
+                            <a href="#" class="btn-action btn-action-notif" data-bs-toggle="modal" data-bs-target="#notificationsModal" onclick="markNotificationsRead()">
+                                <i class="fa fa-bell"></i>
+                                Notifications
+                                <?php if ($unread_count > 0): ?>
+                                    <span class="notif-badge" style="background:#dc3545;color:white;border-radius:20px;padding:1px 7px;font-size:0.68rem;font-weight:700;line-height:1.4;">
+                                        <?= $unread_count ?>
+                                    </span>
+                                <?php endif; ?>
                             </a>
                             <a href="#" class="btn-action btn-action-hist" data-bs-toggle="modal" data-bs-target="#historyModal">
                                 <i class="fa fa-clock-rotate-left"></i>History
@@ -430,28 +453,54 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
             <div class="modal-header py-2">
-                <h6 class="modal-title"><i class="fa fa-bell me-2"></i>Notifications</h6>
+                <h6 class="modal-title">
+                    <i class="fa fa-bell me-2"></i>Notifications
+                    <?php if ($unread_count > 0): ?>
+                        <span class="notif-badge" style="background:#dc3545;color:white;border-radius:20px;padding:1px 8px;font-size:0.72rem;font-weight:700;margin-left:6px;">
+                            <?= $unread_count ?> new
+                        </span>
+                    <?php endif; ?>
+                </h6>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <div class="modal-body">
+            <div class="modal-body p-0">
                 <?php
-                $notif = $conn->query("SELECT * FROM announcements ORDER BY DatePosted DESC LIMIT 5");
-                if ($notif && $notif->num_rows > 0):
-                    while ($n = $notif->fetch_assoc()):
+                $notif_stmt = $conn->prepare("SELECT * FROM notifications WHERE StudentID=? ORDER BY DateCreated DESC LIMIT 20");
+                $notif_stmt->bind_param("s", $id);
+                $notif_stmt->execute();
+                $notifs = $notif_stmt->get_result();
+                if ($notifs && $notifs->num_rows > 0):
+                    while ($n = $notifs->fetch_assoc()):
+                        $is_new    = !$n['IsRead'];
+                        $icon_bg   = $is_new ? '#5c2b7a' : '#f3eaf9';
+                        $icon_color= $is_new ? 'white' : 'var(--purple)';
+                        $row_bg    = $is_new ? '#f8f4fc' : 'white';
+                        $approved  = stripos($n['Message'], 'approved') !== false;
+                        $icon      = $approved ? 'fa-circle-check' : 'fa-circle-xmark';
+                        $icon_clr  = $approved ? '#198754' : '#dc3545';
                 ?>
-                    <div class="d-flex gap-3 align-items-start pb-3 mb-3 border-bottom">
-                        <div style="width:36px;height:36px;min-width:36px;border-radius:50%;background:#f3eaf9;display:flex;align-items:center;justify-content:center;">
-                            <i class="fa fa-bullhorn" style="color:var(--purple);font-size:0.85rem;"></i>
+                    <div style="display:flex;gap:12px;align-items:flex-start;padding:12px 16px;background:<?= $row_bg ?>;border-bottom:1px solid #f0f0f0;">
+                        <div style="width:36px;height:36px;min-width:36px;border-radius:50%;background:<?= $icon_bg ?>;display:flex;align-items:center;justify-content:center;">
+                            <i class="fa <?= $icon ?>" style="color:<?= $is_new ? $icon_clr : 'var(--purple)' ?>;font-size:1rem;"></i>
                         </div>
-                        <div>
-                            <div style="font-size:0.88rem;font-weight:600;color:#333;"><?php echo htmlspecialchars($n['Title']); ?></div>
-                            <div style="font-size:0.8rem;color:#888;"><?php echo htmlspecialchars($n['Message']); ?></div>
-                            <div style="font-size:0.75rem;color:#bbb;margin-top:3px;"><i class="fa fa-calendar me-1"></i><?php echo htmlspecialchars($n['DatePosted']); ?></div>
+                        <div style="flex:1;">
+                            <div style="font-size:0.87rem;color:#333;line-height:1.4;<?= $is_new ? 'font-weight:600;' : '' ?>">
+                                <?php echo htmlspecialchars($n['Message']); ?>
+                            </div>
+                            <div style="font-size:0.75rem;color:#bbb;margin-top:3px;">
+                                <i class="fa fa-clock me-1"></i><?php echo htmlspecialchars($n['DateCreated']); ?>
+                            </div>
                         </div>
+                        <?php if ($is_new): ?>
+                            <span style="width:8px;height:8px;min-width:8px;border-radius:50%;background:#dc3545;margin-top:5px;"></span>
+                        <?php endif; ?>
                     </div>
                 <?php endwhile; else: ?>
-                    <p class="text-muted text-center mb-0"><i class="fa fa-bell-slash me-2"></i>No notifications yet.</p>
-                <?php endif; ?>
+                    <div class="text-center py-4 text-muted">
+                        <i class="fa fa-bell-slash fa-2x mb-2 d-block" style="color:#ddd;"></i>
+                        No notifications yet.
+                    </div>
+                <?php endif; $notif_stmt->close(); ?>
             </div>
         </div>
     </div>
@@ -661,6 +710,18 @@ document.addEventListener('DOMContentLoaded', function () {
     new bootstrap.Modal(document.getElementById('reservationsModal')).show();
 });
 <?php endif; ?>
+
+// Mark notifications as read via AJAX when modal opens
+function markNotificationsRead() {
+    fetch('', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'mark_notifications_read=1'
+    }).then(() => {
+        // Remove badge from button and modal header after opening
+        document.querySelectorAll('.notif-badge').forEach(el => el.remove());
+    });
+}
 </script>
 </body>
 </html>

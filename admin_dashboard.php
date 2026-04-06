@@ -113,18 +113,47 @@ if (isset($_GET['search_student'])) {
 // Approve reservation
 if (isset($_POST['approve_reservation'])) {
     $rid = (int)$_POST['res_id'];
-    $s = $conn->prepare("UPDATE sit_in_sessions SET Status='Active' WHERE SessionID=? AND Type='Reservation'");
-    $s->bind_param("i", $rid);
-    $s->execute(); $s->close();
+    // Get reservation details first
+    $r_stmt = $conn->prepare("SELECT StudentID, SessionDate, Lab, Purpose FROM sit_in_sessions WHERE SessionID=? AND Type='Reservation'");
+    $r_stmt->bind_param("i", $rid);
+    $r_stmt->execute();
+    $r_row = $r_stmt->get_result()->fetch_assoc();
+    $r_stmt->close();
+
+    if ($r_row) {
+        // Set to Active
+        $s = $conn->prepare("UPDATE sit_in_sessions SET Status='Active' WHERE SessionID=? AND Type='Reservation'");
+        $s->bind_param("i", $rid);
+        $s->execute(); $s->close();
+
+        // Insert notification for student
+        $msg = "Your reservation for " . $r_row['Purpose'] . " at Lab " . $r_row['Lab'] . " on " . $r_row['SessionDate'] . " has been approved.";
+        $n = $conn->prepare("INSERT INTO notifications (StudentID, Message) VALUES (?,?)");
+        $n->bind_param("ss", $r_row['StudentID'], $msg);
+        $n->execute(); $n->close();
+    }
     header("Location: admin_dashboard.php?tab=reservations"); exit();
 }
 
 // Reject reservation
 if (isset($_POST['reject_reservation'])) {
     $rid = (int)$_POST['res_id'];
-    $s = $conn->prepare("UPDATE sit_in_sessions SET Status='Cancelled' WHERE SessionID=? AND Type='Reservation'");
-    $s->bind_param("i", $rid);
-    $s->execute(); $s->close();
+    $r_stmt = $conn->prepare("SELECT StudentID, SessionDate, Lab, Purpose FROM sit_in_sessions WHERE SessionID=? AND Type='Reservation'");
+    $r_stmt->bind_param("i", $rid);
+    $r_stmt->execute();
+    $r_row = $r_stmt->get_result()->fetch_assoc();
+    $r_stmt->close();
+
+    if ($r_row) {
+        $s = $conn->prepare("UPDATE sit_in_sessions SET Status='Cancelled' WHERE SessionID=? AND Type='Reservation'");
+        $s->bind_param("i", $rid);
+        $s->execute(); $s->close();
+
+        $msg = "Your reservation for " . $r_row['Purpose'] . " at Lab " . $r_row['Lab'] . " on " . $r_row['SessionDate'] . " has been rejected.";
+        $n = $conn->prepare("INSERT INTO notifications (StudentID, Message) VALUES (?,?)");
+        $n->bind_param("ss", $r_row['StudentID'], $msg);
+        $n->execute(); $n->close();
+    }
     header("Location: admin_dashboard.php?tab=reservations"); exit();
 }
 
@@ -135,9 +164,10 @@ if (isset($_POST['reset_all_sessions'])) {
 }
 
 // ── Stats ────────────────────────────────────────────────────────────
-$total_students = $conn->query("SELECT COUNT(*) as c FROM students_info WHERE is_admin=0")->fetch_assoc()['c'];
-$currently_sitin= $conn->query("SELECT COUNT(*) as c FROM sit_in_sessions WHERE Status='Active'")->fetch_assoc()['c'];
-$total_sitin    = $conn->query("SELECT COUNT(*) as c FROM sit_in_sessions")->fetch_assoc()['c'];
+$total_students  = $conn->query("SELECT COUNT(*) as c FROM students_info WHERE is_admin=0")->fetch_assoc()['c'];
+$currently_sitin = $conn->query("SELECT COUNT(*) as c FROM sit_in_sessions WHERE Status='Active'")->fetch_assoc()['c'];
+$total_sitin     = $conn->query("SELECT COUNT(*) as c FROM sit_in_sessions")->fetch_assoc()['c'];
+$pending_res     = $conn->query("SELECT COUNT(*) as c FROM sit_in_sessions WHERE Type='Reservation' AND Status='Pending'")->fetch_assoc()['c'];
 
 $active_tab = $_GET['tab'] ?? 'dashboard';
 ?>
@@ -150,6 +180,8 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
     <style>
         :root { --purple:#5c2b7a; --gold:#c09412; }
 
@@ -331,6 +363,11 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
         </a>
         <a href="admin_dashboard.php?tab=reservations" class="sidebar-link <?= $active_tab==='reservations' ? 'active':'' ?>">
             <i class="fa fa-calendar-check"></i> Reservations
+            <?php if ($pending_res > 0): ?>
+                <span style="margin-left:auto;background:var(--gold);color:#1a1a1a;border-radius:20px;padding:1px 8px;font-size:0.7rem;font-weight:700;">
+                    <?= $pending_res ?>
+                </span>
+            <?php endif; ?>
         </a>
     </nav>
 
@@ -649,12 +686,30 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                             <td><?= htmlspecialchars($r['TimeIn']) ?></td>
                             <td><span class="badge badge-active">Active</span></td>
                             <td>
-                                <form method="POST" style="display:inline;">
-                                    <input type="hidden" name="session_id" value="<?= $r['SessionID'] ?>">
-                                    <button name="logout_session" class="btn btn-sm btn-danger">
-                                        <i class="fa fa-right-from-bracket me-1"></i>Logout
+                                <div class="dropdown">
+                                    <button class="btn btn-sm btn-purple dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                                        <i class="fa fa-ellipsis me-1"></i>Actions
                                     </button>
-                                </form>
+                                    <ul class="dropdown-menu dropdown-menu-end shadow" style="font-size:0.85rem;min-width:170px;">
+                                        <!-- Terminate -->
+                                        <li>
+                                            <form method="POST" onsubmit="return confirm('Terminate this session?')">
+                                                <input type="hidden" name="session_id" value="<?= $r['SessionID'] ?>">
+                                                <button name="logout_session" type="submit" class="dropdown-item text-danger">
+                                                    <i class="fa fa-circle-stop me-2"></i>Terminate Session
+                                                </button>
+                                            </form>
+                                        </li>
+                                        <li><hr class="dropdown-divider"></li>
+                                        <!-- Transfer (placeholder for future module) -->
+                                        <li>
+                                            <button class="dropdown-item text-muted" disabled title="Coming soon">
+                                                <i class="fa fa-arrow-right-arrow-left me-2"></i>Transfer to Another PC
+                                                <span style="font-size:0.7rem;background:#eee;color:#999;border-radius:4px;padding:1px 5px;margin-left:4px;">Soon</span>
+                                            </button>
+                                        </li>
+                                    </ul>
+                                </div>
                             </td>
                         </tr>
                     <?php endwhile; else: ?>
@@ -1131,35 +1186,67 @@ function exportExcel() {
 }
 
 function exportPDF() {
-    const rows   = getTableData();
-    const win    = window.open('', '_blank');
-    const headers= rows[0];
-    const body   = rows.slice(1);
-    let html = `
-        <html><head><title>Sit-in Records</title>
-        <style>
-            body { font-family: Arial, sans-serif; font-size: 11px; margin: 20px; }
-            h2   { color: #5c2b7a; margin-bottom: 4px; }
-            p    { color: #999; font-size: 10px; margin-bottom: 12px; }
-            table{ width:100%; border-collapse:collapse; }
-            th   { background:#5c2b7a; color:white; padding:6px 8px; text-align:left; font-size:10px; }
-            td   { padding:5px 8px; border-bottom:1px solid #eee; font-size:10px; }
-            tr:nth-child(even) td { background:#f8f4fc; }
-        </style></head><body>
-        <h2>CCS Sit-in Records</h2>
-        <p>University of Cebu &mdash; College of Computer Studies &mdash; Generated: ${new Date().toLocaleString()}</p>
-        <table><thead><tr>`;
-    headers.forEach(h => html += `<th>${h}</th>`);
-    html += '</tr></thead><tbody>';
-    body.forEach(row => {
-        html += '<tr>';
-        row.forEach(cell => html += `<td>${cell}</td>`);
-        html += '</tr>';
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+
+    // Header bar
+    doc.setFillColor(92, 43, 122);
+    doc.rect(0, 0, doc.internal.pageSize.getWidth(), 50, 'F');
+
+    // Title
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(14);
+    doc.setFont('helvetica', 'bold');
+    doc.text('CCS Sit-in Monitoring System — Records Report', 40, 22);
+
+    // Subtitle
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    doc.text('University of Cebu Main Campus — College of Computer Studies', 40, 38);
+
+    // Generated date (right side)
+    const dateStr = 'Generated: ' + new Date().toLocaleString();
+    doc.setFontSize(8);
+    doc.text(dateStr, doc.internal.pageSize.getWidth() - 40, 38, { align: 'right' });
+
+    // Table
+    const rows    = getTableData();
+    const headers = [rows[0]];
+    const body    = rows.slice(1);
+
+    doc.autoTable({
+        head: headers,
+        body: body,
+        startY: 60,
+        margin: { left: 40, right: 40 },
+        styles: {
+            fontSize: 8,
+            cellPadding: 5,
+            overflow: 'linebreak',
+        },
+        headStyles: {
+            fillColor: [92, 43, 122],
+            textColor: 255,
+            fontStyle: 'bold',
+        },
+        alternateRowStyles: {
+            fillColor: [248, 244, 252],
+        },
+        didDrawPage: function(data) {
+            // Footer on each page
+            const pageCount = doc.internal.getNumberOfPages();
+            doc.setFontSize(8);
+            doc.setTextColor(180);
+            doc.text(
+                'Page ' + data.pageNumber + ' of ' + pageCount + '  |  University of Cebu — CCS Sit-in Monitoring System',
+                doc.internal.pageSize.getWidth() / 2,
+                doc.internal.pageSize.getHeight() - 15,
+                { align: 'center' }
+            );
+        }
     });
-    html += '</tbody></table></body></html>';
-    win.document.write(html);
-    win.document.close();
-    win.onload = () => { win.print(); };
+
+    doc.save('sitin_records.pdf');
 }
 
 function printTable() {
