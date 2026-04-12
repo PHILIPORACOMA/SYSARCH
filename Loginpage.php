@@ -147,42 +147,8 @@ if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] == "POST") {
 
     <div class="container pb-5">
 
-        <?php if ($login_success): ?>
-        <!-- ── SUCCESS STATE ── -->
-        <div class="row justify-content-center align-items-center" style="min-height:65vh;">
-            <div class="col-lg-7">
-                <div class="success-card p-5 text-center">
-                    <i class="fa fa-circle-check success-icon mb-3"></i>
-                    <h2 class="welcome-text mb-2">Login Successful!</h2>
-                    <h5 class="text-muted mb-4">Welcome back, <?php echo htmlspecialchars($_SESSION['user_name']); ?></h5>
 
-                    <div class="row g-3 mb-4">
-                        <div class="col-md-6">
-                            <div class="card info-card p-3">
-                                <div class="card-title mb-1">ID Number</div>
-                                <div class="fw-bold fs-5" style="color:var(--purple)">
-                                    <?php echo htmlspecialchars($_SESSION['user_id']); ?>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="card info-card p-3">
-                                <div class="card-title mb-1">Quick Actions</div>
-                                <div class="d-flex gap-2 justify-content-center flex-wrap">
-                                    <a href="student_dashboard.php" class="btn btn-go-home btn-sm px-3">Dashboard</a>
-                                    <a href="logout.php" class="btn btn-go-logout btn-sm px-3">Logout</a>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <p class="text-muted" style="font-size:0.85rem">
-                        You are now logged in to the CCS Sit-in Monitoring System.
-                    </p>
-                </div>
-            </div>
-        </div>
-
-        <?php else: ?>
+        <?php ?>
         <!-- ── LOGIN FORM ── -->
         <div class="row justify-content-center">
             <div class="col-lg-9">
@@ -238,7 +204,7 @@ if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] == "POST") {
                 </div>
             </div>
         </div>
-        <?php endif; ?>
+        <?php ?>
 
     </div>
 

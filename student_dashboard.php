@@ -11,6 +11,21 @@ if (!isset($_SESSION['user_id'])) {
 include "db.php";
 $id = $_SESSION['user_id'];
 
+/* ── AJAX: Get occupied PCs for a lab on a date ── */
+if (isset($_GET['get_pcs'])) {
+    $lab  = trim($_GET['lab']);
+    $date = trim($_GET['date']);
+    $occ  = $conn->prepare("SELECT PCNumber FROM sit_in_sessions WHERE Lab=? AND SessionDate=? AND Status IN ('Active','Pending') AND PCNumber IS NOT NULL");
+    $occ->bind_param("ss", $lab, $date);
+    $occ->execute();
+    $rows = $occ->get_result()->fetch_all(MYSQLI_ASSOC);
+    $occ->close();
+    $occupied = array_column($rows, 'PCNumber');
+    header('Content-Type: application/json');
+    echo json_encode(['occupied' => $occupied]);
+    exit();
+}
+
 /* ── Handle Edit Profile ── */
 if (isset($_POST['update_profile'])) {
     $fname = trim($_POST['first_name']);
@@ -39,16 +54,17 @@ if (isset($_POST['submit_reservation'])) {
     $lab     = trim($_POST['res_lab']);
     $timein  = trim($_POST['res_timein']);
     $date    = trim($_POST['res_date']);
+    $pc      = !empty($_POST['res_pc']) ? (int)$_POST['res_pc'] : null;
 
-    // Check for duplicate reservation on same date/lab/time
+    // Check for duplicate reservation on same date
     $dup = $conn->prepare("SELECT SessionID FROM sit_in_sessions WHERE StudentID=? AND SessionDate=? AND Type='Reservation' AND Status='Pending'");
     $dup->bind_param("ss", $id, $date);
     $dup->execute();
     if ($dup->get_result()->num_rows > 0) {
         $res_error = "You already have a pending reservation on that date.";
     } else {
-        $ins = $conn->prepare("INSERT INTO sit_in_sessions (StudentID, Purpose, Lab, TimeIn, SessionDate, Status, Type) VALUES (?,?,?,?,?,'Pending','Reservation')");
-        $ins->bind_param("sssss", $id, $purpose, $lab, $timein, $date);
+        $ins = $conn->prepare("INSERT INTO sit_in_sessions (StudentID, Purpose, Lab, TimeIn, SessionDate, Status, Type, PCNumber) VALUES (?,?,?,?,?,'Pending','Reservation',?)");
+        $ins->bind_param("sssssi", $id, $purpose, $lab, $timein, $date, $pc);
         $ins->execute(); $ins->close();
         $res_success = "Reservation submitted successfully!";
     }
@@ -608,17 +624,42 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
                                     <option>Other</option>
                                 </select>
                             </div>
-                            <div class="col-sm-6">
-                                <label class="res-field-label">Lab</label>
-                                <select name="res_lab" class="form-select" required>
-                                    <option value="">Select lab</option>
-                                    <option>524</option>
-                                    <option>526</option>
-                                    <option>528</option>
-                                    <option>530</option>
-                                    <option>542</option>
-                                    <option>Mac Lab</option>
-                                </select>
+                            <div class="col-12">
+                                <label class="res-field-label">Lab &amp; PC Selection</label>
+                                <div class="d-flex gap-2 mb-2 flex-wrap">
+                                    <?php foreach (['524','526','528','530','542','Mac Lab'] as $labopt): ?>
+                                        <button type="button" class="lab-btn btn btn-sm"
+                                            data-lab="<?= $labopt ?>"
+                                            style="border:2px solid #ddd;border-radius:8px;background:white;color:#555;font-size:0.82rem;padding:5px 14px;transition:all 0.2s;">
+                                            Lab <?= $labopt ?>
+                                        </button>
+                                    <?php endforeach; ?>
+                                </div>
+                                <input type="hidden" name="res_lab" id="res_lab_input" required>
+                                <input type="hidden" name="res_pc"  id="res_pc_input">
+
+                                <!-- PC Grid (shown after lab selected) -->
+                                <div id="pcPickerWrap" style="display:none;margin-top:10px;">
+                                    <div style="font-size:0.72rem;color:var(--purple);font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;">
+                                        Select a PC — <span id="pcLabLabel"></span>
+                                    </div>
+
+                                    <!-- Legend -->
+                                    <div class="d-flex gap-3 mb-2 flex-wrap">
+                                        <div style="display:flex;align-items:center;gap:5px;font-size:0.75rem;color:#666;">
+                                            <div style="width:14px;height:14px;border-radius:4px;background:#e9f7ef;border:2px solid #198754;"></div> Available
+                                        </div>
+                                        <div style="display:flex;align-items:center;gap:5px;font-size:0.75rem;color:#666;">
+                                            <div style="width:14px;height:14px;border-radius:4px;background:#fde8e8;border:2px solid #dc3545;"></div> Occupied
+                                        </div>
+                                        <div style="display:flex;align-items:center;gap:5px;font-size:0.75rem;color:#666;">
+                                            <div style="width:14px;height:14px;border-radius:4px;background:#f3eaf9;border:2px solid #5c2b7a;"></div> Your Selection
+                                        </div>
+                                    </div>
+
+                                    <div id="pcGrid" style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;max-width:380px;"></div>
+                                    <div id="pcPickerMsg" style="font-size:0.78rem;color:#888;margin-top:8px;"></div>
+                                </div>
                             </div>
                             <div class="col-sm-6">
                                 <label class="res-field-label">Preferred Time In</label>
@@ -648,6 +689,7 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
                                 <th style="background:var(--purple);color:white;">Date</th>
                                 <th style="background:var(--purple);color:white;">Purpose</th>
                                 <th style="background:var(--purple);color:white;">Lab</th>
+                                <th style="background:var(--purple);color:white;">PC</th>
                                 <th style="background:var(--purple);color:white;">Time In</th>
                                 <th style="background:var(--purple);color:white;">Status</th>
                                 <th style="background:var(--purple);color:white;">Action</th>
@@ -672,6 +714,7 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
                                 <td><?= htmlspecialchars($r['SessionDate']) ?></td>
                                 <td><?= htmlspecialchars($r['Purpose']) ?></td>
                                 <td><?= htmlspecialchars($r['Lab']) ?></td>
+                                <td><?= $r['PCNumber'] ? 'PC '.$r['PCNumber'] : '<span class="text-muted">—</span>' ?></td>
                                 <td><?= htmlspecialchars($r['TimeIn']) ?></td>
                                 <td><span class="<?= $rbadge ?>"><?= htmlspecialchars($r['Status']) ?></span></td>
                                 <td>
@@ -718,9 +761,107 @@ function markNotificationsRead() {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: 'mark_notifications_read=1'
     }).then(() => {
-        // Remove badge from button and modal header after opening
         document.querySelectorAll('.notif-badge').forEach(el => el.remove());
     });
+}
+
+/* ══════════════════════════════════════
+   PC PICKER
+══════════════════════════════════════ */
+const LAB_PC_COUNT = { '524':40, '526':40, '528':40, '530':40, '542':40, 'Mac Lab':20 };
+
+document.querySelectorAll('.lab-btn').forEach(btn => {
+    btn.addEventListener('click', function () {
+        // Highlight selected lab button
+        document.querySelectorAll('.lab-btn').forEach(b => {
+            b.style.borderColor = '#ddd';
+            b.style.background  = 'white';
+            b.style.color       = '#555';
+        });
+        this.style.borderColor = '#5c2b7a';
+        this.style.background  = '#f3eaf9';
+        this.style.color       = '#5c2b7a';
+
+        const lab  = this.dataset.lab;
+        const date = document.querySelector('[name="res_date"]')?.value || '';
+        document.getElementById('res_lab_input').value = lab;
+        document.getElementById('res_pc_input').value  = '';
+        document.getElementById('pcLabLabel').innerText = 'Lab ' + lab;
+        document.getElementById('pcPickerWrap').style.display = 'block';
+        document.getElementById('pcPickerMsg').innerText = '';
+        loadPCs(lab, date);
+    });
+});
+
+// Re-load PCs when date changes
+const resDateInput = document.querySelector('[name="res_date"]');
+if (resDateInput) {
+    resDateInput.addEventListener('change', function () {
+        const lab = document.getElementById('res_lab_input').value;
+        if (lab) loadPCs(lab, this.value);
+    });
+}
+
+function loadPCs(lab, date) {
+    const grid  = document.getElementById('pcGrid');
+    const total = LAB_PC_COUNT[lab] || 30;
+    grid.innerHTML = '<div style="grid-column:1/-1;font-size:0.78rem;color:#999;padding:8px 0;">Loading PCs...</div>';
+
+    const url = window.location.pathname + '?get_pcs=1&lab=' + encodeURIComponent(lab) + '&date=' + encodeURIComponent(date);
+    fetch(url)
+        .then(r => r.json())
+        .then(data => {
+            const occupied = (data.occupied || []).map(Number);
+            grid.innerHTML  = '';
+            let available   = 0;
+
+            for (let i = 1; i <= total; i++) {
+                const isOcc = occupied.includes(i);
+                if (!isOcc) available++;
+
+                const pc = document.createElement('div');
+                pc.innerText      = i;
+                pc.dataset.pc     = i;
+                pc.title          = 'PC ' + i + (isOcc ? ' — Occupied' : ' — Available');
+                pc.style.cssText  =
+                    'width:100%;aspect-ratio:1/1;border-radius:8px;display:flex;align-items:center;' +
+                    'justify-content:center;font-size:0.78rem;font-weight:700;' +
+                    'cursor:' + (isOcc ? 'not-allowed' : 'pointer') + ';' +
+                    'border:2px solid ' + (isOcc ? '#dc3545' : '#198754') + ';' +
+                    'background:' + (isOcc ? '#fde8e8' : '#e9f7ef') + ';' +
+                    'color:' + (isOcc ? '#dc3545' : '#198754') + ';' +
+                    'transition:all 0.15s;';
+
+                if (!isOcc) {
+                    pc.addEventListener('click', function () {
+                        // Deselect all available PCs
+                        grid.querySelectorAll('div[data-pc]').forEach(p => {
+                            if (!occupied.includes(Number(p.dataset.pc))) {
+                                p.style.borderColor = '#198754';
+                                p.style.background  = '#e9f7ef';
+                                p.style.color       = '#198754';
+                            }
+                        });
+                        // Select this one
+                        this.style.borderColor = '#5c2b7a';
+                        this.style.background  = '#f3eaf9';
+                        this.style.color       = '#5c2b7a';
+                        document.getElementById('res_pc_input').value = this.dataset.pc;
+                        document.getElementById('pcPickerMsg').innerHTML =
+                            '<i class="fa fa-check-circle me-1" style="color:#198754;"></i>' +
+                            'PC ' + this.dataset.pc + ' selected';
+                    });
+                }
+                grid.appendChild(pc);
+            }
+
+            document.getElementById('pcPickerMsg').innerHTML =
+                '<i class="fa fa-circle-info me-1" style="color:var(--purple);"></i>' +
+                available + ' of ' + total + ' PCs available — click a green PC to reserve';
+        })
+        .catch(() => {
+            grid.innerHTML = '<div style="grid-column:1/-1;font-size:0.78rem;color:#dc3545;padding:8px 0;">Could not load PC availability.</div>';
+        });
 }
 </script>
 </body>
