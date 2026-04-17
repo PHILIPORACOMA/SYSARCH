@@ -5,6 +5,9 @@ $login_success = isset($_SESSION['login_success']) && $_SESSION['login_success']
 
 include "db.php";
 
+// Check for session expiration message
+$session_expired = isset($_GET['session_expired']) && $_GET['session_expired'] == 1;
+
 if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] == "POST") {
     $email    = $_POST['email'];
     $password = $_POST['password'];
@@ -21,6 +24,8 @@ if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] == "POST") {
         $_SESSION['user_id']       = $user['IdNumber'];
         $_SESSION['user_name']     = $user['FirstName'] . ' ' . $user['LastName'];
         $_SESSION['login_success'] = true;
+        $_SESSION['login_time']    = time(); // Session start time
+        $_SESSION['last_activity'] = time(); // Last activity time
         // Redirect admin to admin dashboard
         $redirect = (!empty($user['is_admin'])) ? "admin_dashboard.php" : "student_dashboard.php";
         header("Location: " . $redirect);
@@ -159,6 +164,12 @@ if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] == "POST") {
                         <div class="col-md-6">
                             <h3 class="section-title mb-1">Welcome back</h3>
                             <p class="text-muted mb-4" style="font-size:0.85rem">Sign in to your CCS account</p>
+
+                            <?php if ($session_expired): ?>
+                                <div class="alert alert-warning py-2 px-3" style="font-size:0.85rem; border-radius:8px;">
+                                    <i class="fa fa-clock me-2"></i><strong>Session Expired:</strong> Your session has been automatically terminated due to inactivity (2-hour limit). Please log in again.
+                                </div>
+                            <?php endif; ?>
 
                             <?php if (isset($error)): ?>
                                 <div class="alert alert-danger py-2 px-3" style="font-size:0.85rem; border-radius:8px;">

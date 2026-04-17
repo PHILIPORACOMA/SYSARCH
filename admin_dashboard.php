@@ -532,7 +532,7 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                     <?php
                     $stu = $conn->query("
                         SELECT si.*,
-                            COALESCE(si.SessionCredits, 30) as MaxCredits,
+                            30 as MaxCredits,
                             COUNT(s.SessionID) as UsedSessions
                         FROM students_info si
                         LEFT JOIN sit_in_sessions s
@@ -641,7 +641,7 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
     <!-- ══════════════ CURRENT SIT-IN TAB ══════════════ -->
     <?php elseif ($active_tab === 'sitin'): ?>
 
-    <div class="dash-card">
+    <div class="dash-card" style="overflow:visible;">
         <div class="card-header-purple d-flex justify-content-between align-items-center">
             <span><i class="fa fa-desktop me-2"></i>Currently Active Sessions</span>
             <form method="POST" onsubmit="return confirm('Log out ALL active sessions?')">
@@ -650,8 +650,8 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                 </button>
             </form>
         </div>
-        <div class="card-body p-0">
-            <div class="table-responsive">
+        <div class="card-body p-0" style="overflow:visible;">
+            <div class="table-responsive" style="overflow:visible;">
                 <table class="table table-hover mb-0">
                     <thead>
                         <tr>
@@ -660,6 +660,7 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                             <th>Name</th>
                             <th>Purpose</th>
                             <th>Lab</th>
+                            <th>PC</th>
                             <th>Time In</th>
                             <th>Status</th>
                             <th>Action</th>
@@ -683,6 +684,7 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                             <td><?= htmlspecialchars($r['FirstName'].' '.$r['LastName']) ?></td>
                             <td><?= htmlspecialchars($r['Purpose'] ?? '—') ?></td>
                             <td><?= htmlspecialchars($r['Lab'] ?? '—') ?></td>
+                            <td><?= $r['PCNumber'] ? 'PC '.$r['PCNumber'] : '<span class="text-muted">—</span>' ?></td>
                             <td><?= htmlspecialchars($r['TimeIn']) ?></td>
                             <td><span class="badge badge-active">Active</span></td>
                             <td>
@@ -690,8 +692,7 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                                     <button class="btn btn-sm btn-purple dropdown-toggle" type="button" data-bs-toggle="dropdown">
                                         <i class="fa fa-ellipsis me-1"></i>Actions
                                     </button>
-                                    <ul class="dropdown-menu dropdown-menu-end shadow" style="font-size:0.85rem;min-width:170px;">
-                                        <!-- Terminate -->
+                                    <ul class="dropdown-menu dropdown-menu-end shadow" style="font-size:0.85rem;min-width:180px;">
                                         <li>
                                             <form method="POST" onsubmit="return confirm('Terminate this session?')">
                                                 <input type="hidden" name="session_id" value="<?= $r['SessionID'] ?>">
@@ -701,7 +702,6 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                                             </form>
                                         </li>
                                         <li><hr class="dropdown-divider"></li>
-                                        <!-- Transfer (placeholder for future module) -->
                                         <li>
                                             <button class="dropdown-item text-muted" disabled title="Coming soon">
                                                 <i class="fa fa-arrow-right-arrow-left me-2"></i>Transfer to Another PC
@@ -713,7 +713,7 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                             </td>
                         </tr>
                     <?php endwhile; else: ?>
-                        <tr><td colspan="8" class="text-center text-muted py-3">
+                        <tr><td colspan="9" class="text-center text-muted py-3">
                             <i class="fa fa-desktop me-2"></i>No active sit-in sessions.
                         </td></tr>
                     <?php endif; ?>
@@ -756,6 +756,7 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                             <th>Name</th>
                             <th>Purpose</th>
                             <th>Lab</th>
+                            <th>PC</th>
                             <th>Time In</th>
                             <th>Time Out</th>
                             <th>Date</th>
@@ -780,13 +781,14 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                             <td><?= htmlspecialchars($r['FirstName'].' '.$r['LastName']) ?></td>
                             <td><?= htmlspecialchars($r['Purpose'] ?? '—') ?></td>
                             <td><?= htmlspecialchars($r['Lab'] ?? '—') ?></td>
+                            <td><?= $r['PCNumber'] ? 'PC '.$r['PCNumber'] : '<span class="text-muted">—</span>' ?></td>
                             <td><?= htmlspecialchars($r['TimeIn']) ?></td>
                             <td><?= $r['TimeOut'] ? htmlspecialchars($r['TimeOut']) : '<span class="text-muted">—</span>' ?></td>
                             <td><?= htmlspecialchars($r['SessionDate']) ?></td>
                             <td><span class="badge <?= $rb ?>"><?= htmlspecialchars($r['Status']) ?></span></td>
                         </tr>
                     <?php endwhile; else: ?>
-                        <tr><td colspan="9" class="text-center text-muted py-3">No records found.</td></tr>
+                        <tr><td colspan="10" class="text-center text-muted py-3">No records found.</td></tr>
                     <?php endif; ?>
                     </tbody>
                 </table>
@@ -864,7 +866,7 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
     $pending_count = $conn->query("SELECT COUNT(*) as c FROM sit_in_sessions WHERE Type='Reservation' AND Status='Pending'")->fetch_assoc()['c'];
     ?>
 
-    <div class="dash-card">
+    <div class="dash-card" style="overflow:visible;">
         <div class="card-header-purple d-flex justify-content-between align-items-center">
             <span><i class="fa fa-calendar-check me-2"></i>Student Reservations</span>
             <?php if ($pending_count > 0): ?>
@@ -873,8 +875,8 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                 </span>
             <?php endif; ?>
         </div>
-        <div class="card-body p-0">
-            <div class="table-responsive">
+        <div class="card-body p-0" style="overflow:visible;">
+            <div class="table-responsive" style="overflow:visible;">
                 <table class="table table-hover mb-0">
                     <thead>
                         <tr>
@@ -883,6 +885,7 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                             <th>Name</th>
                             <th>Purpose</th>
                             <th>Lab</th>
+                            <th>PC</th>
                             <th>Time In</th>
                             <th>Date</th>
                             <th>Status</th>
@@ -913,6 +916,7 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                             <td><?= htmlspecialchars($r['FirstName'].' '.$r['LastName']) ?></td>
                             <td><?= htmlspecialchars($r['Purpose'] ?? '—') ?></td>
                             <td><?= htmlspecialchars($r['Lab'] ?? '—') ?></td>
+                            <td><?= $r['PCNumber'] ? '<span style="font-weight:700;color:var(--purple);">PC '.$r['PCNumber'].'</span>' : '<span class="text-muted">—</span>' ?></td>
                             <td><?= htmlspecialchars($r['TimeIn']) ?></td>
                             <td><?= htmlspecialchars($r['SessionDate']) ?></td>
                             <td>
@@ -936,6 +940,29 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                                             </button>
                                         </form>
                                     </div>
+                                <?php elseif (strtolower($r['Status']) === 'active'): ?>
+                                    <div class="dropdown">
+                                        <button class="btn btn-sm btn-purple dropdown-toggle" type="button" data-bs-toggle="dropdown" style="font-size:0.75rem;padding:3px 10px;">
+                                            <i class="fa fa-ellipsis me-1"></i>Actions
+                                        </button>
+                                        <ul class="dropdown-menu dropdown-menu-end shadow" style="font-size:0.85rem;min-width:180px;">
+                                            <li>
+                                                <form method="POST" onsubmit="return confirm('Terminate this session?')">
+                                                    <input type="hidden" name="session_id" value="<?= $r['SessionID'] ?>">
+                                                    <button name="logout_session" type="submit" class="dropdown-item text-danger">
+                                                        <i class="fa fa-circle-stop me-2"></i>Terminate Session
+                                                    </button>
+                                                </form>
+                                            </li>
+                                            <li><hr class="dropdown-divider"></li>
+                                            <li>
+                                                <button class="dropdown-item text-muted" disabled>
+                                                    <i class="fa fa-arrow-right-arrow-left me-2"></i>Transfer PC
+                                                    <span style="font-size:0.7rem;background:#eee;color:#999;border-radius:4px;padding:1px 5px;margin-left:4px;">Soon</span>
+                                                </button>
+                                            </li>
+                                        </ul>
+                                    </div>
                                 <?php else: ?>
                                     <span class="text-muted" style="font-size:0.78rem;">—</span>
                                 <?php endif; ?>
@@ -943,7 +970,7 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                         </tr>
                     <?php endwhile; else: ?>
                         <tr>
-                            <td colspan="9" class="text-center text-muted py-4">
+                            <td colspan="10" class="text-center text-muted py-4">
                                 <i class="fa fa-calendar-xmark me-2"></i>No reservations found.
                             </td>
                         </tr>
