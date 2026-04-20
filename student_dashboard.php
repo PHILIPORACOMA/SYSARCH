@@ -15,6 +15,14 @@ $id = $_SESSION['user_id'];
 if (isset($_GET['get_pcs'])) {
     $lab  = trim($_GET['lab']);
     $date = trim($_GET['date']);
+    // Get total PC count from labs table
+    $lab_q = $conn->prepare("SELECT PCCount FROM labs WHERE LabName=?");
+    $lab_q->bind_param("s", $lab);
+    $lab_q->execute();
+    $lab_row = $lab_q->get_result()->fetch_assoc();
+    $lab_q->close();
+    $pc_count = $lab_row ? (int)$lab_row['PCCount'] : 40;
+    // Get occupied PCs
     $occ  = $conn->prepare("SELECT PCNumber FROM sit_in_sessions WHERE Lab=? AND SessionDate=? AND Status IN ('Active','Pending') AND PCNumber IS NOT NULL");
     $occ->bind_param("ss", $lab, $date);
     $occ->execute();
@@ -22,11 +30,38 @@ if (isset($_GET['get_pcs'])) {
     $occ->close();
     $occupied = array_column($rows, 'PCNumber');
     header('Content-Type: application/json');
-    echo json_encode(['occupied' => $occupied]);
+    echo json_encode(['occupied' => $occupied, 'total' => $pc_count]);
     exit();
 }
 
-/* ── Handle Edit Profile ── */
+/* ── AJAX: Get labs list for PC picker ── */
+if (isset($_GET['get_labs'])) {
+    $labs_q = $conn->query("SELECT LabName, PCCount FROM labs ORDER BY LabName ASC");
+    $labs_list = $labs_q ? $labs_q->fetch_all(MYSQLI_ASSOC) : [];
+    header('Content-Type: application/json');
+    echo json_encode($labs_list);
+    exit();
+}
+
+/* ── Handle Feedback Submission ── */
+if (isset($_POST['submit_feedback'])) {
+    $session_id = (int)$_POST['fb_session_id'];
+    $rating     = (int)$_POST['fb_rating'];
+    $message    = trim($_POST['fb_message']);
+    // Check if already submitted
+    $chk = $conn->prepare("SELECT FeedbackID FROM feedback WHERE SessionID=? AND StudentID=?");
+    $chk->bind_param("is", $session_id, $id);
+    $chk->execute();
+    if ($chk->get_result()->num_rows === 0) {
+        $ins = $conn->prepare("INSERT INTO feedback (SessionID, StudentID, Rating, Message) VALUES (?,?,?,?)");
+        $ins->bind_param("isis", $session_id, $id, $rating, $message);
+        $ins->execute(); $ins->close();
+    }
+    $chk->close();
+    header("Location: student_dashboard.php"); exit();
+}
+
+
 if (isset($_POST['update_profile'])) {
     $fname = trim($_POST['first_name']);
     $mname = trim($_POST['middle_name']);
@@ -380,12 +415,18 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
                         <table class="table table-hover mb-0">
                             <thead>
                                 <tr>
-                                    <th>Date</th><th>Purpose</th><th>Lab</th><th>Time In</th><th>Time Out</th><th>Status</th>
+                                    <th>Date</th><th>Purpose</th><th>Lab</th><th>Time In</th><th>Time Out</th><th>Status</th><th>Feedback</th>
                                 </tr>
                             </thead>
                             <tbody>
                             <?php
-                            $ss = $conn->prepare("SELECT * FROM sit_in_sessions WHERE StudentID=? ORDER BY SessionDate DESC, TimeIn DESC");
+                            $ss = $conn->prepare("
+                                SELECT s.*, f.FeedbackID, f.Rating as fb_rating
+                                FROM sit_in_sessions s
+                                LEFT JOIN feedback f ON f.SessionID = s.SessionID AND f.StudentID = s.StudentID
+                                WHERE s.StudentID=? AND (s.Type='Sit-in' OR s.Type IS NULL)
+                                ORDER BY s.SessionDate DESC, s.TimeIn DESC
+                            ");
                             $ss->bind_param("s", $id);
                             $ss->execute();
                             $sessions = $ss->get_result();
@@ -400,9 +441,26 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
                                     <td><?php echo htmlspecialchars($s['TimeIn']); ?></td>
                                     <td><?php echo $s['TimeOut'] ? htmlspecialchars($s['TimeOut']) : '<span class="text-muted">—</span>'; ?></td>
                                     <td><span class="<?= $badge ?>"><?php echo htmlspecialchars($s['Status']); ?></span></td>
+                                    <td>
+                                        <?php if (strtolower($s['Status']) === 'completed'): ?>
+                                            <?php if ($s['FeedbackID']): ?>
+                                                <span style="color:var(--gold);font-size:0.82rem;">
+                                                    <?php for($x=1;$x<=5;$x++) echo $x<=$s['fb_rating'] ? '★' : '☆'; ?>
+                                                </span>
+                                            <?php else: ?>
+                                                <button class="btn btn-sm"
+                                                    style="background:var(--purple);color:white;border:none;border-radius:6px;font-size:0.75rem;padding:2px 10px;"
+                                                    onclick="openFeedback(<?= $s['SessionID'] ?>, '<?= htmlspecialchars($s['SessionDate']) ?>', '<?= htmlspecialchars($s['Purpose'] ?? '') ?>')">
+                                                    <i class="fa fa-star me-1"></i>Rate
+                                                </button>
+                                            <?php endif; ?>
+                                        <?php else: ?>
+                                            <span class="text-muted" style="font-size:0.78rem;">—</span>
+                                        <?php endif; ?>
+                                    </td>
                                 </tr>
                             <?php endwhile; else: ?>
-                                <tr><td colspan="6" class="text-center text-muted py-3"><i class="fa fa-inbox me-2"></i>No sessions found</td></tr>
+                                <tr><td colspan="7" class="text-center text-muted py-3"><i class="fa fa-inbox me-2"></i>No sessions found</td></tr>
                             <?php endif; $ss->close(); ?>
                             </tbody>
                         </table>
@@ -626,25 +684,30 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
                             </div>
                             <div class="col-12">
                                 <label class="res-field-label">Lab &amp; PC Selection</label>
-                                <div class="d-flex gap-2 mb-2 flex-wrap">
-                                    <?php foreach (['524','526','528','530','542','Mac Lab'] as $labopt): ?>
+                                <div class="d-flex gap-2 mb-2 flex-wrap" id="labButtonsWrap">
+                                    <?php
+                                    $labs_q = $conn->query("SELECT LabName, PCCount FROM labs ORDER BY LabName ASC");
+                                    if ($labs_q && $labs_q->num_rows > 0):
+                                        while ($lb = $labs_q->fetch_assoc()):
+                                    ?>
                                         <button type="button" class="lab-btn btn btn-sm"
-                                            data-lab="<?= $labopt ?>"
+                                            data-lab="<?= htmlspecialchars($lb['LabName']) ?>"
+                                            data-total="<?= (int)$lb['PCCount'] ?>"
                                             style="border:2px solid #ddd;border-radius:8px;background:white;color:#555;font-size:0.82rem;padding:5px 14px;transition:all 0.2s;">
-                                            Lab <?= $labopt ?>
+                                            <i class="fa fa-door-open me-1"></i>Lab <?= htmlspecialchars($lb['LabName']) ?>
                                         </button>
-                                    <?php endforeach; ?>
+                                    <?php endwhile; else: ?>
+                                        <span style="font-size:0.78rem;color:#999;">No labs configured.</span>
+                                    <?php endif; ?>
                                 </div>
                                 <input type="hidden" name="res_lab" id="res_lab_input" required>
                                 <input type="hidden" name="res_pc"  id="res_pc_input">
 
-                                <!-- PC Grid (shown after lab selected) -->
+                                <!-- PC Grid -->
                                 <div id="pcPickerWrap" style="display:none;margin-top:10px;">
                                     <div style="font-size:0.72rem;color:var(--purple);font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;">
                                         Select a PC — <span id="pcLabLabel"></span>
                                     </div>
-
-                                    <!-- Legend -->
                                     <div class="d-flex gap-3 mb-2 flex-wrap">
                                         <div style="display:flex;align-items:center;gap:5px;font-size:0.75rem;color:#666;">
                                             <div style="width:14px;height:14px;border-radius:4px;background:#e9f7ef;border:2px solid #198754;"></div> Available
@@ -656,8 +719,7 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
                                             <div style="width:14px;height:14px;border-radius:4px;background:#f3eaf9;border:2px solid #5c2b7a;"></div> Your Selection
                                         </div>
                                     </div>
-
-                                    <div id="pcGrid" style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;max-width:380px;"></div>
+                                    <div id="pcGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(52px,1fr));gap:8px;max-width:420px;"></div>
                                     <div id="pcPickerMsg" style="font-size:0.78rem;color:#888;margin-top:8px;"></div>
                                 </div>
                             </div>
@@ -745,6 +807,53 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
 </div>
 
 
+<!-- ════ FEEDBACK MODAL ════ -->
+<div class="modal fade" id="feedbackModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header py-2">
+                <h6 class="modal-title"><i class="fa fa-star me-2"></i>Rate Your Session</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="fb_session_info" style="background:#f8f4fc;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:0.85rem;color:#555;"></div>
+                <form method="POST" id="feedbackForm">
+                    <input type="hidden" name="fb_session_id" id="fb_session_id">
+
+                    <!-- Star Rating -->
+                    <div class="mb-3">
+                        <label style="font-size:0.8rem;color:#777;font-weight:500;display:block;margin-bottom:8px;">Rating</label>
+                        <div class="star-rating d-flex gap-2">
+                            <?php for($i=1;$i<=5;$i++): ?>
+                            <label style="cursor:pointer;">
+                                <input type="radio" name="fb_rating" value="<?= $i ?>" style="display:none;" required>
+                                <i class="fa fa-star star-icon" data-val="<?= $i ?>"
+                                    style="font-size:1.8rem;color:#ddd;transition:color 0.15s;"></i>
+                            </label>
+                            <?php endfor; ?>
+                        </div>
+                        <div id="ratingLabel" style="font-size:0.78rem;color:#999;margin-top:4px;"></div>
+                    </div>
+
+                    <!-- Message -->
+                    <div class="mb-3">
+                        <label style="font-size:0.8rem;color:#777;font-weight:500;">Comments <span class="text-muted">(optional)</span></label>
+                        <textarea name="fb_message" class="form-control mt-1" rows="3"
+                            placeholder="Share your experience in the lab..." style="border-radius:8px;font-size:0.88rem;"></textarea>
+                    </div>
+
+                    <div class="d-flex justify-content-end gap-2">
+                        <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" name="submit_feedback" class="btn btn-sm btn-save px-4">
+                            <i class="fa fa-paper-plane me-1"></i>Submit Feedback
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 // Auto-open reservations modal if there was a form submission result
@@ -765,10 +874,51 @@ function markNotificationsRead() {
     });
 }
 
+/* ── Feedback Modal ── */
+const ratingLabels = ['', 'Poor', 'Fair', 'Good', 'Very Good', 'Excellent'];
+
+function openFeedback(sessionId, date, purpose) {
+    document.getElementById('fb_session_id').value = sessionId;
+    document.getElementById('fb_session_info').innerHTML =
+        '<i class="fa fa-calendar me-1" style="color:var(--purple);"></i><b>Date:</b> ' + date +
+        ' &nbsp;|&nbsp; <i class="fa fa-code me-1" style="color:var(--purple);"></i><b>Purpose:</b> ' + (purpose || '—');
+    // Reset stars
+    document.querySelectorAll('.star-icon').forEach(s => s.style.color = '#ddd');
+    document.querySelectorAll('input[name="fb_rating"]').forEach(r => r.checked = false);
+    document.getElementById('ratingLabel').innerText = '';
+    new bootstrap.Modal(document.getElementById('feedbackModal')).show();
+}
+
+// Star hover and click
+document.querySelectorAll('.star-icon').forEach(star => {
+    star.addEventListener('mouseover', function() {
+        const val = parseInt(this.dataset.val);
+        document.querySelectorAll('.star-icon').forEach((s, i) => {
+            s.style.color = i < val ? '#c09412' : '#ddd';
+        });
+    });
+    star.addEventListener('mouseout', function() {
+        const checked = document.querySelector('input[name="fb_rating"]:checked');
+        const val = checked ? parseInt(checked.value) : 0;
+        document.querySelectorAll('.star-icon').forEach((s, i) => {
+            s.style.color = i < val ? '#c09412' : '#ddd';
+        });
+    });
+    star.addEventListener('click', function() {
+        const val = parseInt(this.dataset.val);
+        const radio = document.querySelector('input[name="fb_rating"][value="' + val + '"]');
+        if (radio) radio.checked = true;
+        document.querySelectorAll('.star-icon').forEach((s, i) => {
+            s.style.color = i < val ? '#c09412' : '#ddd';
+        });
+        document.getElementById('ratingLabel').innerHTML =
+            '<span style="color:var(--gold);font-weight:600;">' + ratingLabels[val] + '</span>';
+    });
+});
+
 /* ══════════════════════════════════════
    PC PICKER
 ══════════════════════════════════════ */
-const LAB_PC_COUNT = { '524':40, '526':40, '528':40, '530':40, '542':40, 'Mac Lab':20 };
 
 document.querySelectorAll('.lab-btn').forEach(btn => {
     btn.addEventListener('click', function () {
@@ -803,8 +953,7 @@ if (resDateInput) {
 }
 
 function loadPCs(lab, date) {
-    const grid  = document.getElementById('pcGrid');
-    const total = LAB_PC_COUNT[lab] || 30;
+    const grid = document.getElementById('pcGrid');
     grid.innerHTML = '<div style="grid-column:1/-1;font-size:0.78rem;color:#999;padding:8px 0;">Loading PCs...</div>';
 
     const url = window.location.pathname + '?get_pcs=1&lab=' + encodeURIComponent(lab) + '&date=' + encodeURIComponent(date);
@@ -812,20 +961,20 @@ function loadPCs(lab, date) {
         .then(r => r.json())
         .then(data => {
             const occupied = (data.occupied || []).map(Number);
-            grid.innerHTML  = '';
-            let available   = 0;
+            const total    = data.total || 40;
+            grid.innerHTML = '';
+            let available  = 0;
 
             for (let i = 1; i <= total; i++) {
                 const isOcc = occupied.includes(i);
                 if (!isOcc) available++;
 
                 const pc = document.createElement('div');
-                pc.innerText      = i;
-                pc.dataset.pc     = i;
-                pc.title          = 'PC ' + i + (isOcc ? ' — Occupied' : ' — Available');
-                pc.style.cssText  =
-                    'width:100%;aspect-ratio:1/1;border-radius:8px;display:flex;align-items:center;' +
-                    'justify-content:center;font-size:0.78rem;font-weight:700;' +
+                pc.dataset.pc    = i;
+                pc.title         = 'PC ' + i + (isOcc ? ' — Occupied' : ' — Available');
+                pc.innerHTML     = '<i class="fa fa-desktop" style="font-size:1rem;display:block;margin-bottom:2px;"></i>' + i;
+                pc.style.cssText =
+                    'border-radius:8px;padding:6px 4px;text-align:center;font-size:0.72rem;font-weight:700;' +
                     'cursor:' + (isOcc ? 'not-allowed' : 'pointer') + ';' +
                     'border:2px solid ' + (isOcc ? '#dc3545' : '#198754') + ';' +
                     'background:' + (isOcc ? '#fde8e8' : '#e9f7ef') + ';' +
@@ -834,7 +983,6 @@ function loadPCs(lab, date) {
 
                 if (!isOcc) {
                     pc.addEventListener('click', function () {
-                        // Deselect all available PCs
                         grid.querySelectorAll('div[data-pc]').forEach(p => {
                             if (!occupied.includes(Number(p.dataset.pc))) {
                                 p.style.borderColor = '#198754';
@@ -842,14 +990,12 @@ function loadPCs(lab, date) {
                                 p.style.color       = '#198754';
                             }
                         });
-                        // Select this one
                         this.style.borderColor = '#5c2b7a';
                         this.style.background  = '#f3eaf9';
                         this.style.color       = '#5c2b7a';
                         document.getElementById('res_pc_input').value = this.dataset.pc;
                         document.getElementById('pcPickerMsg').innerHTML =
-                            '<i class="fa fa-check-circle me-1" style="color:#198754;"></i>' +
-                            'PC ' + this.dataset.pc + ' selected';
+                            '<i class="fa fa-check-circle me-1" style="color:#198754;"></i>PC ' + this.dataset.pc + ' selected';
                     });
                 }
                 grid.appendChild(pc);
