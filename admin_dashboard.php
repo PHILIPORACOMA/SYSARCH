@@ -24,6 +24,38 @@ if (!$chk_row || !$chk_row['is_admin']) {
 
 // ── Handle POST actions ──────────────────────────────────────────────
 
+// Update lab PC count
+if (isset($_POST['update_lab'])) {
+    $lab_id   = (int)$_POST['lab_id'];
+    $lab_name = trim($_POST['lab_name']);
+    $pc_count = (int)$_POST['pc_count'];
+    $desc     = trim($_POST['lab_desc']);
+    $s = $conn->prepare("UPDATE labs SET LabName=?, PCCount=?, Description=? WHERE LabID=?");
+    $s->bind_param("sisi", $lab_name, $pc_count, $desc, $lab_id);
+    $s->execute(); $s->close();
+    header("Location: admin_dashboard.php?tab=labs"); exit();
+}
+
+// Add new lab
+if (isset($_POST['add_lab'])) {
+    $name = trim($_POST['lab_name']);
+    $cnt  = (int)$_POST['lab_count'];
+    $desc = trim($_POST['lab_desc_new']);
+    $s = $conn->prepare("INSERT INTO labs (LabName, PCCount, Description) VALUES (?,?,?)");
+    $s->bind_param("sis", $name, $cnt, $desc);
+    $s->execute(); $s->close();
+    header("Location: admin_dashboard.php?tab=labs"); exit();
+}
+
+// Delete lab
+if (isset($_POST['delete_lab'])) {
+    $lab_id = (int)$_POST['lab_id'];
+    $s = $conn->prepare("DELETE FROM labs WHERE LabID=?");
+    $s->bind_param("i", $lab_id);
+    $s->execute(); $s->close();
+    header("Location: admin_dashboard.php?tab=labs"); exit();
+}
+
 // Post announcement
 if (isset($_POST['post_announcement'])) {
     $title   = trim($_POST['ann_title']);
@@ -369,6 +401,12 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                 </span>
             <?php endif; ?>
         </a>
+        <a href="admin_dashboard.php?tab=feedback" class="sidebar-link <?= $active_tab==='feedback' ? 'active':'' ?>">
+            <i class="fa fa-star"></i> Feedback
+        </a>
+        <a href="admin_dashboard.php?tab=labs" class="sidebar-link <?= $active_tab==='labs' ? 'active':'' ?>">
+            <i class="fa fa-desktop"></i> Labs &amp; PCs
+        </a>
     </nav>
 
     <div class="sidebar-footer">
@@ -395,6 +433,8 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                 'records'       => '<i class="fa fa-table-list me-2"></i>Sit-in Records',
                 'announcements' => '<i class="fa fa-bullhorn me-2"></i>Announcements',
                 'reservations'  => '<i class="fa fa-calendar-check me-2"></i>Reservations',
+                'feedback'      => '<i class="fa fa-star me-2"></i>Student Feedback',
+                'labs'          => '<i class="fa fa-desktop me-2"></i>Labs &amp; PCs Configuration',
             ];
             echo $titles[$active_tab] ?? $titles['dashboard'];
             ?>
@@ -1077,6 +1117,264 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
         </div>
     </div>
 
+
+    <!-- ══════════════ FEEDBACK TAB ══════════════ -->
+    <?php elseif ($active_tab === 'feedback'): ?>
+
+    <?php
+    $avg_rating = $conn->query("SELECT ROUND(AVG(Rating),1) as avg FROM feedback")->fetch_assoc()['avg'];
+    $total_fb   = $conn->query("SELECT COUNT(*) as c FROM feedback")->fetch_assoc()['c'];
+    $dist       = $conn->query("SELECT Rating, COUNT(*) as cnt FROM feedback GROUP BY Rating ORDER BY Rating DESC")->fetch_all(MYSQLI_ASSOC);
+    ?>
+
+    <!-- Summary cards -->
+    <div class="row g-3 mb-4">
+        <div class="col-md-4">
+            <div class="stat-card">
+                <div class="stat-icon gold"><i class="fa fa-star"></i></div>
+                <div>
+                    <div class="stat-num"><?= $avg_rating ?: '—' ?></div>
+                    <div class="stat-label">Average Rating</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="stat-card">
+                <div class="stat-icon purple"><i class="fa fa-comments"></i></div>
+                <div>
+                    <div class="stat-num"><?= $total_fb ?></div>
+                    <div class="stat-label">Total Feedbacks</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="dash-card p-3">
+                <div style="font-size:0.72rem;color:var(--purple);font-weight:700;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:10px;">Rating Distribution</div>
+                <?php
+                $dist_map = array_column($dist, 'cnt', 'Rating');
+                for ($r = 5; $r >= 1; $r--):
+                    $cnt = $dist_map[$r] ?? 0;
+                    $pct = $total_fb > 0 ? round(($cnt / $total_fb) * 100) : 0;
+                ?>
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;">
+                    <span style="font-size:0.75rem;color:#999;width:12px;"><?= $r ?></span>
+                    <i class="fa fa-star" style="color:#c09412;font-size:0.75rem;"></i>
+                    <div style="flex:1;height:8px;border-radius:4px;background:#f0f0f0;overflow:hidden;">
+                        <div style="width:<?= $pct ?>%;height:100%;background:var(--gold);border-radius:4px;"></div>
+                    </div>
+                    <span style="font-size:0.75rem;color:#999;width:24px;"><?= $cnt ?></span>
+                </div>
+                <?php endfor; ?>
+            </div>
+        </div>
+    </div>
+
+    <!-- Feedback table -->
+    <div class="dash-card">
+        <div class="card-header-purple d-flex justify-content-between align-items-center">
+            <span><i class="fa fa-star me-2"></i>All Student Feedback</span>
+            <input type="text" id="feedbackSearch" class="search-box" placeholder="Search..." style="width:180px;">
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0" id="feedbackTable">
+                    <thead>
+                        <tr>
+                            <th>Student</th>
+                            <th>ID Number</th>
+                            <th>Rating</th>
+                            <th>Comments</th>
+                            <th>Session Date</th>
+                            <th>Purpose</th>
+                            <th>Lab</th>
+                            <th>Submitted</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php
+                    $fb = $conn->query("
+                        SELECT f.*, st.FirstName, st.LastName, s.SessionDate, s.Purpose, s.Lab
+                        FROM feedback f
+                        JOIN students_info st ON f.StudentID = st.IdNumber
+                        JOIN sit_in_sessions s ON f.SessionID = s.SessionID
+                        ORDER BY f.DatePosted DESC
+                    ");
+                    if ($fb && $fb->num_rows > 0):
+                        while ($f = $fb->fetch_assoc()):
+                            $stars = '';
+                            for ($x = 1; $x <= 5; $x++)
+                                $stars .= $x <= $f['Rating'] ? '★' : '☆';
+                            $star_color = $f['Rating'] >= 4 ? '#198754' : ($f['Rating'] >= 3 ? '#c09412' : '#dc3545');
+                    ?>
+                        <tr>
+                            <td><b><?= htmlspecialchars($f['FirstName'].' '.$f['LastName']) ?></b></td>
+                            <td style="font-size:0.8rem;"><?= htmlspecialchars($f['StudentID']) ?></td>
+                            <td>
+                                <span style="color:<?= $star_color ?>;font-size:1rem;letter-spacing:1px;"><?= $stars ?></span>
+                                <span style="font-size:0.75rem;color:#999;margin-left:3px;">(<?= $f['Rating'] ?>/5)</span>
+                            </td>
+                            <td style="font-size:0.85rem;max-width:200px;">
+                                <?= $f['Message'] ? htmlspecialchars($f['Message']) : '<span class="text-muted">No comment</span>' ?>
+                            </td>
+                            <td><?= htmlspecialchars($f['SessionDate']) ?></td>
+                            <td><?= htmlspecialchars($f['Purpose'] ?? '—') ?></td>
+                            <td><?= htmlspecialchars($f['Lab'] ?? '—') ?></td>
+                            <td style="font-size:0.8rem;"><?= htmlspecialchars($f['DatePosted']) ?></td>
+                        </tr>
+                    <?php endwhile; else: ?>
+                        <tr><td colspan="8" class="text-center text-muted py-4">
+                            <i class="fa fa-star fa-2x mb-2 d-block" style="color:#ddd;"></i>No feedback yet.
+                        </td></tr>
+                    <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- ══════════════ LABS & PCs TAB ══════════════ -->
+    <?php elseif ($active_tab === 'labs'): ?>
+
+    <?php $labs = $conn->query("SELECT * FROM labs ORDER BY LabName ASC"); ?>
+
+    <div class="row g-4">
+
+        <!-- Add new lab -->
+        <div class="col-md-4">
+            <div class="dash-card">
+                <div class="card-header-gold"><i class="fa fa-plus me-2"></i>Add New Lab</div>
+                <div class="card-body">
+                    <form method="POST">
+                        <div class="mb-3">
+                            <label class="form-label" style="font-size:0.8rem;color:#777;">Lab Name / Number</label>
+                            <input type="text" name="lab_name" class="form-control" placeholder="e.g. 524, Mac Lab" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label" style="font-size:0.8rem;color:#777;">Number of PCs</label>
+                            <input type="number" name="lab_count" class="form-control" min="1" max="100" value="40" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label" style="font-size:0.8rem;color:#777;">Description <span class="text-muted">(optional)</span></label>
+                            <input type="text" name="lab_desc_new" class="form-control" placeholder="e.g. 2nd Floor, Building A">
+                        </div>
+                        <button type="submit" name="add_lab" class="btn btn-gold w-100">
+                            <i class="fa fa-plus me-2"></i>Add Lab
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- Labs list with PC visual grid -->
+        <div class="col-md-8">
+            <?php if ($labs && $labs->num_rows > 0):
+                while ($lab = $labs->fetch_assoc()):
+                    // Get occupied PCs today
+                    $today = date('Y-m-d');
+                    $occ_q = $conn->prepare("SELECT PCNumber FROM sit_in_sessions WHERE Lab=? AND SessionDate=? AND Status='Active' AND PCNumber IS NOT NULL");
+                    $occ_q->bind_param("ss", $lab['LabName'], $today);
+                    $occ_q->execute();
+                    $occ_rows = $occ_q->get_result()->fetch_all(MYSQLI_ASSOC);
+                    $occ_q->close();
+                    $occupied_pcs = array_column($occ_rows, 'PCNumber');
+                    $total_pcs    = (int)$lab['PCCount'];
+                    $occ_count    = count($occupied_pcs);
+                    $avail_count  = $total_pcs - $occ_count;
+            ?>
+            <div class="dash-card mb-4">
+                <div class="card-header-purple d-flex justify-content-between align-items-center">
+                    <span>
+                        <i class="fa fa-door-open me-2"></i>Lab <?= htmlspecialchars($lab['LabName']) ?>
+                        <?php if ($lab['Description']): ?>
+                            <span style="font-weight:400;font-size:0.8rem;opacity:0.8;margin-left:6px;"><?= htmlspecialchars($lab['Description']) ?></span>
+                        <?php endif; ?>
+                    </span>
+                    <div class="d-flex align-items-center gap-2">
+                        <span style="background:rgba(255,255,255,0.2);border-radius:20px;padding:2px 10px;font-size:0.75rem;">
+                            <?= $avail_count ?>/<?= $total_pcs ?> available
+                        </span>
+                        <button class="btn btn-sm" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.3);border-radius:6px;font-size:0.75rem;"
+                            onclick="toggleEdit(<?= $lab['LabID'] ?>)">
+                            <i class="fa fa-pen me-1"></i>Edit
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Edit form (hidden by default) -->
+                <div id="editLab_<?= $lab['LabID'] ?>" style="display:none;background:#f8f4fc;padding:12px 16px;border-bottom:1px solid #eee;">
+                    <form method="POST" class="row g-2 align-items-end">
+                        <input type="hidden" name="lab_id" value="<?= $lab['LabID'] ?>">
+                        <div class="col-sm-2">
+                            <label style="font-size:0.75rem;color:#777;">Lab Name</label>
+                            <input type="text" name="lab_name" class="form-control form-control-sm" value="<?= htmlspecialchars($lab['LabName']) ?>" required>
+                        </div>
+                        <div class="col-sm-2">
+                            <label style="font-size:0.75rem;color:#777;">PC Count</label>
+                            <input type="number" name="pc_count" class="form-control form-control-sm" value="<?= $total_pcs ?>" min="1" max="100" required>
+                        </div>
+                        <div class="col-sm-4">
+                            <label style="font-size:0.75rem;color:#777;">Description</label>
+                            <input type="text" name="lab_desc" class="form-control form-control-sm" value="<?= htmlspecialchars($lab['Description'] ?? '') ?>">
+                        </div>
+                        <div class="col-sm-4 d-flex gap-2">
+                            <button type="submit" name="update_lab" class="btn btn-sm btn-gold flex-fill">
+                                <i class="fa fa-save me-1"></i>Save
+                            </button>
+                            <form method="POST" style="margin:0;" onsubmit="return confirm('Delete this lab?')">
+                                <input type="hidden" name="lab_id" value="<?= $lab['LabID'] ?>">
+                                <button type="submit" name="delete_lab" class="btn btn-sm btn-danger">
+                                    <i class="fa fa-trash"></i>
+                                </button>
+                            </form>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="card-body">
+                    <!-- Legend -->
+                    <div class="d-flex gap-3 mb-3 flex-wrap">
+                        <div style="display:flex;align-items:center;gap:6px;font-size:0.75rem;color:#666;">
+                            <div style="width:16px;height:16px;border-radius:4px;background:#e9f7ef;border:2px solid #198754;"></div> Available (<?= $avail_count ?>)
+                        </div>
+                        <div style="display:flex;align-items:center;gap:6px;font-size:0.75rem;color:#666;">
+                            <div style="width:16px;height:16px;border-radius:4px;background:#fde8e8;border:2px solid #dc3545;"></div> Occupied (<?= $occ_count ?>)
+                        </div>
+                    </div>
+
+                    <!-- PC Grid -->
+                    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(48px,1fr));gap:8px;">
+                        <?php for ($p = 1; $p <= $total_pcs; $p++):
+                            $is_occ = in_array($p, $occupied_pcs);
+                        ?>
+                        <div title="PC <?= $p ?> — <?= $is_occ ? 'Occupied' : 'Available' ?>"
+                            style="
+                                border-radius:8px;
+                                padding:6px 4px;
+                                text-align:center;
+                                border:2px solid <?= $is_occ ? '#dc3545' : '#198754' ?>;
+                                background:<?= $is_occ ? '#fde8e8' : '#e9f7ef' ?>;
+                                color:<?= $is_occ ? '#dc3545' : '#198754' ?>;
+                                font-size:0.7rem;
+                                font-weight:700;
+                            ">
+                            <i class="fa fa-desktop" style="font-size:1rem;display:block;margin-bottom:2px;"></i>
+                            PC <?= $p ?>
+                        </div>
+                        <?php endfor; ?>
+                    </div>
+                </div>
+            </div>
+            <?php endwhile; else: ?>
+                <div class="dash-card p-5 text-center text-muted">
+                    <i class="fa fa-desktop fa-3x mb-3" style="color:#ddd;"></i>
+                    <p>No labs configured yet. Add one on the left.</p>
+                </div>
+            <?php endif; ?>
+        </div>
+
+    </div>
+
     <?php endif; ?>
 
 </div><!-- end main-content -->
@@ -1164,6 +1462,23 @@ function resetSitinForm() {
     document.getElementById('sitinForm').style.display = 'none';
     document.getElementById('studentLookup').value = '';
     document.getElementById('searchResults').style.display = 'none';
+}
+
+/* ── Feedback live search ── */
+const feedbackSearch = document.getElementById('feedbackSearch');
+if (feedbackSearch) {
+    feedbackSearch.addEventListener('input', function () {
+        const q = this.value.toLowerCase();
+        document.querySelectorAll('#feedbackTable tbody tr').forEach(tr => {
+            tr.style.display = tr.innerText.toLowerCase().includes(q) ? '' : 'none';
+        });
+    });
+}
+
+/* ── Labs edit toggle ── */
+function toggleEdit(labId) {
+    const el = document.getElementById('editLab_' + labId);
+    if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
 }
 
 /* ── Export functions ── */
