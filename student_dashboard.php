@@ -9,6 +9,7 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 include "db.php";
+include "leaderboard_helper.php";
 $id = $_SESSION['user_id'];
 
 // Create uploads directory if it doesn't exist
@@ -92,6 +93,25 @@ if (isset($_POST['remove_photo'])) {
     $upd->close();
     
     echo json_encode(['status' => 'ok']);
+    exit();
+}
+
+/* ── AJAX: Get current photo ── */
+if (isset($_GET['get_current_photo'])) {
+    header('Content-Type: application/json');
+    
+    $photo_q = $conn->prepare("SELECT PhotoPath FROM students_info WHERE IdNumber=?");
+    $photo_q->bind_param("s", $id);
+    $photo_q->execute();
+    $photo_row = $photo_q->get_result()->fetch_assoc();
+    $photo_q->close();
+    
+    $photo_path = null;
+    if ($photo_row && $photo_row['PhotoPath'] && file_exists($photo_row['PhotoPath'])) {
+        $photo_path = $photo_row['PhotoPath'];
+    }
+    
+    echo json_encode(['photo_path' => $photo_path]);
     exit();
 }
 
@@ -255,8 +275,57 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
         .card-header-gold   { background-color:var(--gold); color:#1a1a1a; font-weight:600; border-radius:12px 12px 0 0 !important; padding:10px 16px; }
 
         /* Avatar */
-        .avatar { width:82px; height:82px; border-radius:50%; background-color:var(--purple); color:white; font-size:2rem; display:flex; align-items:center; justify-content:center; margin:0 auto 0.75rem; border:4px solid #f3eaf9; object-fit:cover; }
-        .avatar-img { width:82px; height:82px; border-radius:50%; object-fit:cover; border:4px solid #f3eaf9; margin:0 auto 0.75rem; display:block; }
+        /* Profile Photo Container */
+        .profile-photo-container {
+            position: relative;
+            width: 90px;
+            height: 90px;
+            margin: 0 auto 0.75rem;
+        }
+        .avatar {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            background-color: var(--purple);
+            color: white;
+            font-size: 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 4px solid #f3eaf9;
+            object-fit: cover;
+        }
+        .avatar-img {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 4px solid #f3eaf9;
+            display: block;
+        }
+        .photo-upload-btn {
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background-color: var(--gold);
+            color: #1a1a1a;
+            border: 3px solid white;
+            font-size: 1.2rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        }
+        .photo-upload-btn:hover {
+            background-color: #a87e0f;
+            transform: scale(1.1);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
 
         /* Info rows */
         .info-row { display:flex; justify-content:space-between; padding:7px 0; border-bottom:1px solid #f0f0f0; font-size:0.87rem; }
@@ -326,6 +395,169 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
 
         /* Reservation form */
         .res-field-label { font-size:0.78rem; color:#777; font-weight:500; margin-bottom:3px; }
+
+        /* Leaderboard Styles */
+        .leaderboard-container {
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        
+        .leaderboard-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+        
+        .leaderboard-table thead {
+            background-color: var(--purple);
+            color: white;
+            font-weight: 600;
+        }
+        
+        .leaderboard-table thead th {
+            padding: 12px 16px;
+            text-align: left;
+            border: none;
+        }
+        
+        .rank-col { width: 80px; }
+        .name-col { flex: 1; min-width: 180px; }
+        .course-col { width: 140px; }
+        .score-col { width: 100px; text-align: right; }
+        .detail-col { width: 90px; text-align: center; }
+        
+        .leaderboard-table tbody tr {
+            border-bottom: 1px solid #f0f0f0;
+            transition: background-color 0.2s;
+        }
+        
+        .leaderboard-table tbody tr:hover {
+            background-color: #f8f4fc;
+        }
+        
+        .leaderboard-table tbody tr.top-rank {
+            background-color: #faf6ff;
+        }
+        
+        .leaderboard-table tbody tr.rank-1 {
+            border-left: 4px solid #ffc107;
+        }
+        
+        .leaderboard-table tbody tr.rank-2 {
+            border-left: 4px solid #c0c0c0;
+        }
+        
+        .leaderboard-table tbody tr.rank-3 {
+            border-left: 4px solid #cd7f32;
+        }
+        
+        .leaderboard-table td {
+            padding: 12px 16px;
+        }
+        
+        .rank-cell {
+            text-align: center;
+            font-weight: 600;
+        }
+        
+        .rank-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: white;
+        }
+        
+        .rank-badge.gold {
+            background-color: #ffc107;
+            color: #1a1a1a;
+        }
+        
+        .rank-badge.silver {
+            background-color: #c0c0c0;
+            color: #1a1a1a;
+        }
+        
+        .rank-badge.bronze {
+            background-color: #cd7f32;
+            color: white;
+        }
+        
+        .rank-number {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background-color: var(--purple);
+            color: white;
+            font-weight: 700;
+            font-size: 0.85rem;
+        }
+        
+        .student-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .student-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid #e0e0e0;
+        }
+        
+        .student-avatar-initials {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background-color: var(--purple);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 0.9rem;
+        }
+        
+        .student-name {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .course-cell {
+            font-size: 0.85rem;
+            color: #666;
+        }
+        
+        .score-cell {
+            text-align: right;
+            font-weight: 700;
+        }
+        
+        .score-badge {
+            display: inline-block;
+            background-color: var(--purple);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+        
+        .detail-cell {
+            text-align: center;
+            color: #666;
+            font-size: 0.85rem;
+        }
     </style>
 </head>
 <body>
@@ -365,34 +597,26 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
                 </div>
                 <div class="card-body pt-4">
                     <?php if ($student): ?>
-                        <?php if ($student['PhotoPath'] && file_exists($student['PhotoPath'])): ?>
-                            <img src="<?php echo htmlspecialchars($student['PhotoPath']); ?>" alt="Student Photo" class="avatar-img">
-                        <?php else: ?>
-                            <div class="avatar">
-                                <?php echo strtoupper(substr($student['FirstName'],0,1).substr($student['LastName'],0,1)); ?>
+                        <!-- Profile Photo with Plus Button -->
+                        <div class="profile-photo-container">
+                            <?php if ($student['PhotoPath'] && file_exists($student['PhotoPath'])): ?>
+                                <img src="<?php echo htmlspecialchars($student['PhotoPath']); ?>" alt="Student Photo" class="avatar-img">
+                            <?php else: ?>
+                                <div class="avatar">
+                                    <?php echo strtoupper(substr($student['FirstName'],0,1).substr($student['LastName'],0,1)); ?>
+                                </div>
+                            <?php endif; ?>
+                            <div class="photo-upload-btn" onclick="openPhotoModal()" title="Edit photo">
+                                <i class="fa fa-plus"></i>
                             </div>
-                        <?php endif; ?>
+                        </div>
+
                         <h6 class="text-center fw-bold mb-1" style="color:var(--purple)">
                             <?php echo htmlspecialchars($student['FirstName'].' '.$student['LastName']); ?>
                         </h6>
                         <p class="text-center text-muted mb-3" style="font-size:0.78rem;">
                             <?php echo htmlspecialchars($student['Course']); ?> &mdash; Year <?php echo $student['CourseLevel']; ?>
                         </p>
-
-                        <!-- Upload/Remove Photo Buttons -->
-                        <div class="profile-actions" style="grid-template-columns:1fr 1fr; gap:8px; margin-bottom:1rem;">
-                            <button class="btn-action btn-action-edit" onclick="document.getElementById('photoUploadInput').click();" title="Upload Photo">
-                                <i class="fa fa-camera"></i>Upload Photo
-                            </button>
-                            <?php if ($student['PhotoPath'] && file_exists($student['PhotoPath'])): ?>
-                                <button class="btn-action" style="border-color:#dc3545;" onclick="removePhoto()" title="Remove Photo">
-                                    <i class="fa fa-trash" style="color:#dc3545;"></i>Remove Photo
-                                </button>
-                            <?php endif; ?>
-                            <input type="file" id="photoUploadInput" style="display:none;" accept="image/*" onchange="uploadPhoto(this)">
-                        </div>
-
-                        <div id="photoMessage" style="display:none; margin-bottom:1rem; padding:8px 12px; border-radius:6px; font-size:0.8rem;"></div>
 
                         <div class="info-row">
                             <span class="info-label">ID Number</span>
@@ -576,8 +800,66 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
         <!-- END RIGHT -->
 
     </div>
-</div>
 
+    <!-- ════ LEADERBOARD SECTION ════ -->
+    <div class="row g-4 mt-2">
+        <div class="col-12">
+            <div class="card dash-card">
+                <div class="card-header card-header-gold">
+                    <i class="fa fa-ranking-star me-2"></i>Leaderboard
+                    <small style="float:right; font-size:0.75rem; font-weight:400; color:#333;">Score: 30% Hours • 50% Reservations • 20% Tasks</small>
+                </div>
+                <div class="card-body">
+                    <?php
+                    $leaderboard = getLeaderboardData($conn, 15);
+                    displayLeaderboard($leaderboard, true);
+                    ?>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+<!-- ════ PHOTO MANAGEMENT MODAL ════ -->
+<div class="modal fade" id="photoModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header py-2">
+                <h6 class="modal-title"><i class="fa fa-camera me-2"></i>Manage Profile Photo</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body text-center">
+                <!-- Current Photo Preview -->
+                <div id="photoPreview" style="margin-bottom: 20px;">
+                    <img id="currentPhotoImg" src="" alt="Current Photo" style="max-width: 200px; max-height: 200px; border-radius: 8px; display: none;">
+                    <div id="photoPlaceholder" style="width: 200px; height: 200px; margin: 0 auto; background-color: var(--purple); color: white; display: flex; align-items: center; justify-content: center; border-radius: 8px; font-size: 3rem;">
+                        <i class="fa fa-image"></i>
+                    </div>
+                </div>
+
+                <div id="photoMessage" style="display:none; margin-bottom:15px; padding:10px 12px; border-radius:6px; font-size:0.85rem;"></div>
+
+                <!-- Upload Section -->
+                <div style="margin-bottom: 15px;">
+                    <input type="file" id="photoUploadInput" style="display:none;" accept="image/*" onchange="uploadPhoto(this)">
+                    <button type="button" class="btn btn-sm" style="background-color:var(--purple); color:white; border:none; border-radius:8px; font-weight:600; width:100%; padding:8px 0;" onclick="document.getElementById('photoUploadInput').click();">
+                        <i class="fa fa-cloud-arrow-up me-2"></i>Upload New Photo
+                    </button>
+                </div>
+
+                <!-- Delete Button (only if photo exists) -->
+                <div id="deletePhotoSection" style="display:none; margin-bottom: 15px;">
+                    <button type="button" class="btn btn-sm btn-danger" style="border:none; border-radius:8px; font-weight:600; width:100%; padding:8px 0;" onclick="removePhoto()">
+                        <i class="fa fa-trash me-2"></i>Delete Photo
+                    </button>
+                </div>
+
+                <!-- Close Button -->
+                <button type="button" class="btn btn-secondary btn-sm" style="border-radius:8px; width:100%; padding:8px 0;" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <!-- ════ EDIT PROFILE MODAL ════ -->
 <div class="modal fade" id="editProfileModal" tabindex="-1">
@@ -961,8 +1243,34 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 /* ══════════════════════════════════════
-   PHOTO UPLOAD & REMOVAL
+   PHOTO MANAGEMENT WITH MODAL
 ══════════════════════════════════════ */
+
+function openPhotoModal() {
+    const modal = new bootstrap.Modal(document.getElementById('photoModal'));
+    
+    // Load current photo
+    fetch(window.location.pathname + '?get_current_photo=1')
+        .then(r => r.json())
+        .then(data => {
+            const imgEl = document.getElementById('currentPhotoImg');
+            const placeholderEl = document.getElementById('photoPlaceholder');
+            const deleteBtn = document.getElementById('deletePhotoSection');
+            
+            if (data.photo_path) {
+                imgEl.src = data.photo_path;
+                imgEl.style.display = 'block';
+                placeholderEl.style.display = 'none';
+                deleteBtn.style.display = 'block';
+            } else {
+                imgEl.style.display = 'none';
+                placeholderEl.style.display = 'flex';
+                deleteBtn.style.display = 'none';
+            }
+        });
+    
+    modal.show();
+}
 
 function uploadPhoto(input) {
     if (!input.files || !input.files[0]) return;

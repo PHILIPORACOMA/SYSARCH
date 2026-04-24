@@ -1,3 +1,8 @@
+<?php
+session_start();
+include "db.php";
+include "leaderboard_helper.php";
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -190,6 +195,169 @@
             text-align: center;
         }
         .footer strong { color: white; }
+
+        /* ── Leaderboard ── */
+        .leaderboard-container {
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        
+        .leaderboard-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+        
+        .leaderboard-table thead {
+            background-color: var(--purple);
+            color: white;
+            font-weight: 600;
+        }
+        
+        .leaderboard-table thead th {
+            padding: 12px 16px;
+            text-align: left;
+            border: none;
+        }
+        
+        .rank-col { width: 80px; }
+        .name-col { flex: 1; min-width: 180px; }
+        .course-col { width: 140px; }
+        .score-col { width: 100px; text-align: right; }
+        .detail-col { width: 90px; text-align: center; }
+        
+        .leaderboard-table tbody tr {
+            border-bottom: 1px solid #f0f0f0;
+            transition: background-color 0.2s;
+        }
+        
+        .leaderboard-table tbody tr:hover {
+            background-color: #f8f4fc;
+        }
+        
+        .leaderboard-table tbody tr.top-rank {
+            background-color: #faf6ff;
+        }
+        
+        .leaderboard-table tbody tr.rank-1 {
+            border-left: 4px solid #ffc107;
+        }
+        
+        .leaderboard-table tbody tr.rank-2 {
+            border-left: 4px solid #c0c0c0;
+        }
+        
+        .leaderboard-table tbody tr.rank-3 {
+            border-left: 4px solid #cd7f32;
+        }
+        
+        .leaderboard-table td {
+            padding: 12px 16px;
+        }
+        
+        .rank-cell {
+            text-align: center;
+            font-weight: 600;
+        }
+        
+        .rank-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: white;
+        }
+        
+        .rank-badge.gold {
+            background-color: #ffc107;
+            color: #1a1a1a;
+        }
+        
+        .rank-badge.silver {
+            background-color: #c0c0c0;
+            color: #1a1a1a;
+        }
+        
+        .rank-badge.bronze {
+            background-color: #cd7f32;
+            color: white;
+        }
+        
+        .rank-number {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background-color: var(--purple);
+            color: white;
+            font-weight: 700;
+            font-size: 0.85rem;
+        }
+        
+        .student-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .student-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid #e0e0e0;
+        }
+        
+        .student-avatar-initials {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background-color: var(--purple);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 0.9rem;
+        }
+        
+        .student-name {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .course-cell {
+            font-size: 0.85rem;
+            color: #666;
+        }
+        
+        .score-cell {
+            text-align: right;
+            font-weight: 700;
+        }
+        
+        .score-badge {
+            display: inline-block;
+            background-color: var(--purple);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+        
+        .detail-cell {
+            text-align: center;
+            color: #666;
+            font-size: 0.85rem;
+        }
     </style>
 </head>
 <body>
@@ -245,7 +413,7 @@
                         </div>
                         <div class="col-6 col-sm-3">
                             <div class="feature-card">
-                                <div class="feature-icon"><i class="fa fa-shield-halved"></i></div>
+                                <div class="feature-icon"><i class="bi bi-shield-shaded"></i></div>
                                 <h6>Secure Access</h6>
                                 <p>Student-only authenticated login</p>
                             </div>
@@ -380,5 +548,7 @@
     </footer>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+
 </body>
 </html>

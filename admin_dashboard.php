@@ -9,6 +9,7 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 include "db.php";
+include "leaderboard_helper.php";
 
 // Check if admin
 $chk = $conn->prepare("SELECT is_admin FROM students_info WHERE IdNumber = ?");
@@ -360,6 +361,168 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
             padding: 0.4rem 0.75rem; font-size: 0.88rem;
         }
         .search-box:focus { border-color:var(--purple); outline:none; box-shadow:0 0 0 3px rgba(92,43,122,0.1); }
+
+        /* ── Leaderboard ── */
+        .leaderboard-container {
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        
+        .leaderboard-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+        
+        .leaderboard-table thead {
+            background-color: var(--purple);
+            color: white;
+            font-weight: 600;
+        }
+        
+        .leaderboard-table thead th {
+            padding: 12px 16px;
+            text-align: left;
+            border: none;
+        }
+        
+        .rank-col { width: 80px; }
+        .name-col { flex: 1; min-width: 180px; }
+        .course-col { width: 140px; }
+        .score-col { width: 100px; text-align: right; }
+        .detail-col { width: 90px; text-align: center; }
+        
+        .leaderboard-table tbody tr {
+            border-bottom: 1px solid #f0f0f0;
+            transition: background-color 0.2s;
+        }
+        
+        .leaderboard-table tbody tr:hover {
+            background-color: #f8f4fc;
+        }
+        
+        .leaderboard-table tbody tr.top-rank {
+            background-color: #faf6ff;
+        }
+        
+        .leaderboard-table tbody tr.rank-1 {
+            border-left: 4px solid #ffc107;
+        }
+        
+        .leaderboard-table tbody tr.rank-2 {
+            border-left: 4px solid #c0c0c0;
+        }
+        
+        .leaderboard-table tbody tr.rank-3 {
+            border-left: 4px solid #cd7f32;
+        }
+        
+        .leaderboard-table td {
+            padding: 12px 16px;
+        }
+        
+        .rank-cell {
+            text-align: center;
+            font-weight: 600;
+        }
+        
+        .rank-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: white;
+        }
+        
+        .rank-badge.gold {
+            background-color: #ffc107;
+            color: #1a1a1a;
+        }
+        
+        .rank-badge.silver {
+            background-color: #c0c0c0;
+            color: #1a1a1a;
+        }
+        
+        .rank-badge.bronze {
+            background-color: #cd7f32;
+            color: white;
+        }
+        
+        .rank-number {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background-color: var(--purple);
+            color: white;
+            font-weight: 700;
+            font-size: 0.85rem;
+        }
+        
+        .student-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .student-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid #e0e0e0;
+        }
+        
+        .student-avatar-initials {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background-color: var(--purple);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 0.9rem;
+        }
+        
+        .student-name {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .course-cell {
+            font-size: 0.85rem;
+            color: #666;
+        }
+        
+        .score-cell {
+            text-align: right;
+            font-weight: 700;
+        }
+        
+        .score-badge {
+            display: inline-block;
+            background-color: var(--purple);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+        
+        .detail-cell {
+            text-align: center;
+            color: #666;
+            font-size: 0.85rem;
+        }
     </style>
 </head>
 <body>
@@ -387,6 +550,9 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
         </a>
         <a href="admin_dashboard.php?tab=records" class="sidebar-link <?= $active_tab==='records' ? 'active':'' ?>">
             <i class="fa fa-table-list"></i> Sit-in Records
+        </a>
+        <a href="admin_dashboard.php?tab=leaderboard" class="sidebar-link <?= $active_tab==='leaderboard' ? 'active':'' ?>">
+            <i class="fa fa-ranking-star"></i> Leaderboard
         </a>
 
         <div class="nav-item-label">Manage</div>
@@ -483,7 +649,7 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
         <div class="col-md-5">
             <div class="dash-card h-100">
                 <div class="card-header-purple">
-                    <i class="fa fa-chart-pie me-2"></i>Sessions by Purpose
+                    <i class="fa fa-chart-pie me-2"></i>Analytics
                 </div>
                 <div class="card-body d-flex align-items-center justify-content-center" style="min-height:260px;">
                     <canvas id="purposeChart" style="max-height:240px;"></canvas>
@@ -833,6 +999,23 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                     </tbody>
                 </table>
             </div>
+        </div>
+    </div>
+
+
+    <!-- ══════════════ LEADERBOARD TAB ══════════════ -->
+    <?php elseif ($active_tab === 'leaderboard'): ?>
+
+    <div class="dash-card">
+        <div class="card-header-purple d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <span><i class="fa fa-ranking-star me-2"></i>Student Leaderboard</span>
+            <small style="font-weight:400; color:#ddd;">Score: 30% Hours • 50% Reservations • 20% Tasks</small>
+        </div>
+        <div class="card-body">
+            <?php
+            $leaderboard = getLeaderboardData($conn, 20);
+            displayLeaderboard($leaderboard, true);
+            ?>
         </div>
     </div>
 
