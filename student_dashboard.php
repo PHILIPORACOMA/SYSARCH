@@ -151,6 +151,7 @@ if (isset($_GET['get_labs'])) {
 if (isset($_POST['submit_feedback'])) {
     $session_id = (int)$_POST['fb_session_id'];
     $rating     = (int)$_POST['fb_rating'];
+    $task_completed = floatval($_POST['fb_task_completed']);
     $message    = trim($_POST['fb_message']);
     // Check if already submitted
     $chk = $conn->prepare("SELECT FeedbackID FROM feedback WHERE SessionID=? AND StudentID=?");
@@ -160,6 +161,12 @@ if (isset($_POST['submit_feedback'])) {
         $ins = $conn->prepare("INSERT INTO feedback (SessionID, StudentID, Rating, Message) VALUES (?,?,?,?)");
         $ins->bind_param("isis", $session_id, $id, $rating, $message);
         $ins->execute(); $ins->close();
+        
+        // Update sit_in_sessions with task completion status
+        $upd = $conn->prepare("UPDATE sit_in_sessions SET TaskCompleted=? WHERE SessionID=?");
+        $upd->bind_param("di", $task_completed, $session_id);
+        $upd->execute(); $upd->close();
+        
         $feedback_result = 'success';
     } else {
         $feedback_result = 'already';
@@ -246,12 +253,29 @@ if (isset($_POST['mark_notifications_read'])) {
     exit();
 }
 
+/* ── Get AI Recommendations (AJAX) ── */
+if (isset($_GET['get_recommendations'])) {
+    header('Content-Type: application/json');
+    $recommendations = getStudentRecommendations($conn, $id);
+    echo json_encode($recommendations);
+    exit();
+}
+
 /* ── Session credits ── */
 $used_sessions   = $conn->query("SELECT COUNT(*) as c FROM sit_in_sessions WHERE StudentID='".mysqli_real_escape_string($conn,$id)."' AND (Type='Sit-in' OR Type IS NULL)")->fetch_assoc()['c'];
 $max_credits     = isset($student['SessionCredits']) ? (int)$student['SessionCredits'] : 30;
 $credits_left    = max(0, $max_credits - $used_sessions);
 $credits_percent = $max_credits > 0 ? round(($credits_left / $max_credits) * 100) : 0;
 $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c09412' : '#dc3545');
+
+/* ── AI Recommendations ── */
+$recommendations = getStudentRecommendations($conn, $id);
+
+// Check if recommendations should be shown (not shown more than once per session)
+$show_recommendations = !isset($_SESSION['recommendations_shown']) || ($_SESSION['recommendations_shown'] < time() - 3600); // Show every hour
+if ($show_recommendations && !empty($recommendations)) {
+    $_SESSION['recommendations_shown'] = time();
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -357,6 +381,7 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
         .btn-action:hover { border-color:var(--purple); background:#f3eaf9; color:var(--purple); }
         .btn-action.btn-action-edit  i { color:var(--purple); }
         .btn-action.btn-action-notif i { color:#e67e22; }
+        .btn-action.btn-action-tips  i { color:#f39c12; }
         .btn-action.btn-action-hist  i { color:#2980b9; }
         .btn-action.btn-action-res   i { color:#27ae60; }
 
@@ -679,6 +704,9 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
                                     </span>
                                 <?php endif; ?>
                             </a>
+                            <a href="#" class="btn-action btn-action-tips" onclick="event.preventDefault(); new bootstrap.Modal(document.getElementById('recommendationsModal')).show(); loadRecommendations();" title="View personalized tips">
+                                <i class="fa fa-lightbulb"></i>AI Tips
+                            </a>
                             <a href="#" class="btn-action btn-action-hist" data-bs-toggle="modal" data-bs-target="#historyModal">
                                 <i class="fa fa-clock-rotate-left"></i>History
                             </a>
@@ -829,7 +857,7 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
             <div class="card dash-card">
                 <div class="card-header card-header-gold">
                     <i class="fa fa-ranking-star me-2"></i>Leaderboard
-                    <small style="float:right; font-size:0.75rem; font-weight:400; color:#333;">Score: 30% Hours • 50% Reservations • 20% Tasks</small>
+                    <small style="float:right; font-size:0.75rem; font-weight:400; color:#333;">Score: 30% Hours • 50% Sit-ins (every 3 = 1 point) • 20% Tasks Completed</small>
                 </div>
                 <div class="card-body">
                     <?php
@@ -1226,7 +1254,7 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
             <div class="modal-header py-2">
-                <h6 class="modal-title"><i class="fa fa-star me-2"></i>Rate Your Session</h6>
+                <h6 class="modal-title"><i class="fa fa-star me-2"></i>Session Feedback</h6>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
@@ -1234,9 +1262,30 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
                 <form method="POST" id="feedbackForm">
                     <input type="hidden" name="fb_session_id" id="fb_session_id">
 
+                    <!-- Task Completion -->
+                    <div class="mb-4">
+                        <label style="font-size:0.8rem;color:#777;font-weight:600;display:block;margin-bottom:10px;">
+                            <i class="fa fa-check-circle me-1" style="color:#198754;"></i>Was the task completed?
+                        </label>
+                        <div class="d-flex gap-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="fb_task_completed" id="task_yes" value="1" required>
+                                <label class="form-check-label" for="task_yes">Yes</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="fb_task_completed" id="task_no" value="0" required>
+                                <label class="form-check-label" for="task_no">No</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="fb_task_completed" id="task_partial" value="0.5" required>
+                                <label class="form-check-label" for="task_partial">Partially</label>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Star Rating -->
                     <div class="mb-3">
-                        <label style="font-size:0.8rem;color:#777;font-weight:500;display:block;margin-bottom:8px;">Rating</label>
+                        <label style="font-size:0.8rem;color:#777;font-weight:500;display:block;margin-bottom:8px;">Experience Rating</label>
                         <div class="star-rating d-flex gap-2">
                             <?php for($i=1;$i<=5;$i++): ?>
                             <label style="cursor:pointer;">
@@ -1263,6 +1312,28 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
                         </button>
                     </div>
                 </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- AI Recommendations Modal -->
+<div class="modal fade" id="recommendationsModal" tabindex="-1" data-bs-backdrop="static">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content" style="border-radius:15px;border:none;box-shadow:0 25px 60px rgba(0,0,0,0.2);">
+            <div class="modal-header" style="background:linear-gradient(135deg, #667eea 0%, #764ba2 100%);border:none;border-radius:15px 15px 0 0;">
+                <h6 class="modal-title" style="color:white;font-weight:700;font-size:1.1rem;">
+                    <i class="fa fa-lightbulb me-2"></i>Personalized Recommendations
+                </h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" style="padding:0;max-height:70vh;overflow-y:auto;">
+                <div id="recommendationsContainer"></div>
+            </div>
+            <div class="modal-footer" style="border-top:1px solid #e0e0e0;padding:15px;background:#f8f9fa;border-radius:0 0 15px 15px;">
+                <button type="button" class="btn btn-primary" data-bs-dismiss="modal" style="background:linear-gradient(135deg, #667eea 0%, #764ba2 100%);border:none;">
+                    Got it, Thanks!
+                </button>
             </div>
         </div>
     </div>
@@ -1402,6 +1473,58 @@ function markNotificationsRead() {
     });
 }
 
+/* ── AI Recommendations ── */
+function loadRecommendations() {
+    fetch('?get_recommendations=1')
+        .then(response => response.json())
+        .then(recommendations => {
+            if (recommendations && recommendations.length > 0) {
+                displayRecommendations(recommendations);
+                // Show modal automatically on first load
+                setTimeout(() => {
+                    new bootstrap.Modal(document.getElementById('recommendationsModal')).show();
+                }, 500);
+            }
+        })
+        .catch(error => console.error('Error loading recommendations:', error));
+}
+
+function displayRecommendations(recommendations) {
+    const container = document.getElementById('recommendationsContainer');
+    container.innerHTML = '';
+    
+    recommendations.forEach((rec, index) => {
+        const priorityClass = rec.priority === 'high' ? 'danger' : 
+                            rec.priority === 'medium' ? 'warning' : 'info';
+        const priorityBadge = rec.priority === 'high' ? '<span class="badge bg-danger ms-2">Important</span>' : '';
+        
+        const recHTML = `
+            <div class="recommendation-item p-4 border-bottom" style="border-left: 4px solid ${rec.color}; background-color: rgba(0,0,0,0.01);">
+                <div class="d-flex align-items-start">
+                    <div style="font-size:2rem;margin-right:15px;color:${rec.color};">
+                        <i class="fa ${rec.icon}"></i>
+                    </div>
+                    <div style="flex:1;">
+                        <h6 style="margin:0 0 5px 0;color:#333;font-weight:700;font-size:1rem;">
+                            ${rec.title}
+                            ${priorityBadge}
+                        </h6>
+                        <p style="margin:5px 0 0 0;color:#666;font-size:0.95rem;line-height:1.5;">
+                            ${rec.message}
+                        </p>
+                    </div>
+                </div>
+            </div>
+        `;
+        container.innerHTML += recHTML;
+    });
+}
+
+// Load recommendations when page loads
+window.addEventListener('load', function() {
+    loadRecommendations();
+});
+
 /* ── Feedback Modal ── */
 const ratingLabels = ['', 'Poor', 'Fair', 'Good', 'Very Good', 'Excellent'];
 
@@ -1410,6 +1533,8 @@ function openFeedback(sessionId, date, purpose) {
     document.getElementById('fb_session_info').innerHTML =
         '<i class="fa fa-calendar me-1" style="color:var(--purple);"></i><b>Date:</b> ' + date +
         ' &nbsp;|&nbsp; <i class="fa fa-code me-1" style="color:var(--purple);"></i><b>Purpose:</b> ' + (purpose || '—');
+    // Reset task completion
+    document.querySelectorAll('input[name="fb_task_completed"]').forEach(r => r.checked = false);
     // Reset stars
     document.querySelectorAll('.star-icon').forEach(s => s.style.color = '#ddd');
     document.querySelectorAll('input[name="fb_rating"]').forEach(r => r.checked = false);

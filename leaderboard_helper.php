@@ -1,7 +1,7 @@
 <?php
 /**
  * Leaderboard Helper Functions
- * Scoring: 30% Hours, 50% Reservations, 20% Tasks
+ * Scoring: 30% Hours, 50% Sit-ins (every 3 = 1 point), 20% Tasks Completed
  */
 
 function getLeaderboardData($conn, $limit = 10) {
@@ -21,8 +21,8 @@ function getLeaderboardData($conn, $limit = 10) {
                 THEN TIMESTAMPDIFF(MINUTE, sit.TimeIn, sit.TimeOut) 
                 ELSE 0 
             END), 0) as total_minutes,
-            COALESCE(SUM(CASE WHEN sit.Type='Reservation' THEN 1 ELSE 0 END), 0) as total_reservations,
-            COALESCE(SUM(CASE WHEN sit.Type='Sit-in' OR sit.Type IS NULL THEN 1 ELSE 0 END), 0) as total_sitins
+            COALESCE(SUM(CASE WHEN sit.Type='Sit-in' OR sit.Type IS NULL THEN 1 ELSE 0 END), 0) as total_sitins,
+            COALESCE(SUM(CASE WHEN (sit.Type='Sit-in' OR sit.Type IS NULL) AND sit.TaskCompleted >= 0.5 THEN 1 ELSE 0 END), 0) as tasks_completed
         FROM students_info s
         LEFT JOIN sit_in_sessions sit ON s.IdNumber = sit.StudentID AND sit.Status='Completed'
         WHERE s.is_admin = 0
@@ -42,15 +42,17 @@ function getLeaderboardData($conn, $limit = 10) {
             $max_hours = 100; // 100 hours as max reference
             $hours_score = min(($hours / $max_hours) * 100, 100) * 0.30;
             
-            // 50% - Reservations (1 point per reservation, normalize to 100 max)
-            $max_reservations = 50; // 50 reservations as max reference
-            $reservation_score = min(($row['total_reservations'] / $max_reservations) * 100, 100) * 0.50;
+            // 50% - Sit-ins (every 3 sit-ins = 1 point, normalize to 100 max)
+            // total_sitins / 3 gives us points, max 100 points = 300 sit-ins
+            $sitin_points = floor($row['total_sitins'] / 3);
+            $max_sitin_points = 100; // 100 points as max reference (300 sit-ins)
+            $sitin_score = min(($sitin_points / $max_sitin_points) * 100, 100) * 0.50;
             
-            // 20% - Sit-in tasks completed (1 point per sit-in session, normalize to 100 max)
-            $max_tasks = 100; // 100 sit-ins as max reference
-            $tasks_score = min(($row['total_sitins'] / $max_tasks) * 100, 100) * 0.20;
+            // 20% - Tasks completed (count sit-ins where task was completed, normalize to 100 max)
+            $max_tasks = 100; // 100 completed tasks as max reference
+            $tasks_score = min(($row['tasks_completed'] / $max_tasks) * 100, 100) * 0.20;
             
-            $total_score = round($hours_score + $reservation_score + $tasks_score, 2);
+            $total_score = round($hours_score + $sitin_score + $tasks_score, 2);
             
             $leaderboard[] = [
                 'rank' => $rank,
@@ -60,11 +62,12 @@ function getLeaderboardData($conn, $limit = 10) {
                 'photo_path' => $row['PhotoPath'],
                 'total_score' => $total_score,
                 'hours_score' => round($hours_score, 2),
-                'reservation_score' => round($reservation_score, 2),
+                'sitin_score' => round($sitin_score, 2),
                 'tasks_score' => round($tasks_score, 2),
                 'hours' => $hours,
-                'reservations' => $row['total_reservations'],
-                'sitins' => $row['total_sitins']
+                'sitin_points' => $sitin_points,
+                'sitins' => $row['total_sitins'],
+                'tasks_completed' => $row['tasks_completed']
             ];
             $rank++;
         }
@@ -110,8 +113,8 @@ function displayLeaderboard($leaderboard, $show_details = false, $class_name = '
                     <th class="score-col">Score</th>
                     <?php if ($show_details): ?>
                         <th class="detail-col">Hours</th>
-                        <th class="detail-col">Reservations</th>
-                        <th class="detail-col">Tasks</th>
+                        <th class="detail-col">Sit-ins Pts</th>
+                        <th class="detail-col">Tasks Done</th>
                     <?php endif; ?>
                 </tr>
             </thead>
@@ -150,10 +153,10 @@ function displayLeaderboard($leaderboard, $show_details = false, $class_name = '
                                 <small><?php echo number_format($entry['hours'], 1); ?>h</small>
                             </td>
                             <td class="detail-cell">
-                                <small><?php echo $entry['reservations']; ?></small>
+                                <small><?php echo $entry['sitin_points']; ?> pts</small>
                             </td>
                             <td class="detail-cell">
-                                <small><?php echo $entry['sitins']; ?></small>
+                                <small><?php echo $entry['tasks_completed']; ?> done</small>
                             </td>
                         <?php endif; ?>
                     </tr>
@@ -162,6 +165,167 @@ function displayLeaderboard($leaderboard, $show_details = false, $class_name = '
         </table>
     </div>
     <?php
+}
+
+/**
+ * Get AI Recommendations for a Student
+ * Analyzes student performance and generates personalized suggestions
+ */
+function getStudentRecommendations($conn, $student_id) {
+    $recommendations = [];
+    
+    // Get student stats
+    $stmt = $conn->prepare("
+        SELECT 
+            COUNT(DISTINCT sit.SessionID) as total_sessions,
+            SUM(CASE WHEN sit.TimeOut IS NOT NULL THEN TIMESTAMPDIFF(MINUTE, sit.TimeIn, sit.TimeOut) ELSE 0 END) as total_minutes,
+            SUM(CASE WHEN sit.Type='Sit-in' OR sit.Type IS NULL THEN 1 ELSE 0 END) as total_sitins,
+            SUM(CASE WHEN (sit.Type='Sit-in' OR sit.Type IS NULL) AND sit.TaskCompleted >= 0.5 THEN 1 ELSE 0 END) as tasks_completed,
+            COUNT(DISTINCT CASE WHEN sit.TaskCompleted = 0 AND sit.TaskCompleted IS NOT NULL THEN sit.SessionID END) as tasks_incomplete
+        FROM sit_in_sessions sit
+        WHERE sit.StudentID=? AND sit.Status='Completed'
+    ");
+    $stmt->bind_param("s", $student_id);
+    $stmt->execute();
+    $stats = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+    
+    // Get leaderboard rank
+    $rank_info = getStudentLeaderboardRank($conn, $student_id);
+    
+    // Get total students
+    $total_students = $conn->query("SELECT COUNT(*) as c FROM students_info WHERE is_admin=0")->fetch_assoc()['c'];
+    
+    $hours = $stats['total_minutes'] ? round($stats['total_minutes'] / 60, 1) : 0;
+    $sitins = $stats['total_sitins'] ? (int)$stats['total_sitins'] : 0;
+    $tasks_completed = $stats['tasks_completed'] ? (int)$stats['tasks_completed'] : 0;
+    $tasks_incomplete = $stats['tasks_incomplete'] ? (int)$stats['tasks_incomplete'] : 0;
+    $task_completion_rate = ($sitins > 0) ? round(($tasks_completed / $sitins) * 100) : 0;
+    $rank = $rank_info['rank'] ?? 999;
+    $score = $rank_info['score'] ?? 0;
+    
+    // Recommendation 1: Hours
+    if ($hours < 10) {
+        $recommendations[] = [
+            'type' => 'hours',
+            'icon' => 'fa-clock',
+            'title' => '⏱️ Increase Lab Hours',
+            'message' => 'You have ' . $hours . ' hours. Try to reach at least 20 hours for better lab experience and skills.',
+            'priority' => 'high',
+            'color' => '#dc3545'
+        ];
+    } elseif ($hours >= 50) {
+        $recommendations[] = [
+            'type' => 'hours',
+            'icon' => 'fa-star',
+            'title' => '⭐ Excellent Dedication!',
+            'message' => 'You\'ve logged ' . $hours . ' hours in the lab! Keep maintaining this excellent habit.',
+            'priority' => 'low',
+            'color' => '#28a745'
+        ];
+    }
+    
+    // Recommendation 2: Sit-ins (every 3 = 1 point)
+    $sitin_points = floor($sitins / 3);
+    if ($sitins < 12) {
+        $recommendations[] = [
+            'type' => 'sitins',
+            'icon' => 'fa-chair',
+            'title' => '🪑 More Sit-in Sessions',
+            'message' => 'You\'ve completed ' . $sitins . ' sit-ins (' . $sitin_points . ' points). Target 30 sit-ins for maximum points.',
+            'priority' => 'high',
+            'color' => '#ff6b6b'
+        ];
+    } elseif ($sitins >= 30) {
+        $recommendations[] = [
+            'type' => 'sitins',
+            'icon' => 'fa-trophy',
+            'title' => '🏆 Outstanding Attendance!',
+            'message' => 'You\'ve had ' . $sitins . ' sit-ins! This shows great commitment to your lab work.',
+            'priority' => 'low',
+            'color' => '#ffc107'
+        ];
+    }
+    
+    // Recommendation 3: Task Completion
+    if ($task_completion_rate < 50) {
+        $recommendations[] = [
+            'type' => 'tasks',
+            'icon' => 'fa-check-circle',
+            'title' => '✓ Focus on Task Completion',
+            'message' => 'Only ' . $task_completion_rate . '% of your tasks are completed. Try to complete all assigned tasks during sessions.',
+            'priority' => 'high',
+            'color' => '#fd7e14'
+        ];
+    } elseif ($task_completion_rate >= 85) {
+        $recommendations[] = [
+            'type' => 'tasks',
+            'icon' => 'fa-star',
+            'title' => '⭐ Great Task Completion!',
+            'message' => $task_completion_rate . '% task completion rate! You\'re doing excellent work.',
+            'priority' => 'low',
+            'color' => '#28a745'
+        ];
+    }
+    
+    // Recommendation 4: Leaderboard Rank
+    if ($rank <= 3) {
+        $recommendations[] = [
+            'type' => 'rank',
+            'icon' => 'fa-crown',
+            'title' => '👑 Top Performer!',
+            'message' => 'You\'re ranked #' . $rank . ' on the leaderboard! Outstanding performance!',
+            'priority' => 'low',
+            'color' => '#ffc107'
+        ];
+    } elseif ($rank <= 10) {
+        $recommendations[] = [
+            'type' => 'rank',
+            'icon' => 'fa-medal',
+            'title' => '🎖️ Top 10 Achiever',
+            'message' => 'You\'re in the top 10 with rank #' . $rank . '! Keep up the great work!',
+            'priority' => 'low',
+            'color' => '#17a2b8'
+        ];
+    } elseif ($rank > ($total_students * 0.75)) {
+        $recommendations[] = [
+            'type' => 'rank',
+            'icon' => 'fa-arrow-up',
+            'title' => '📈 Room for Improvement',
+            'message' => 'You\'re ranked #' . $rank . '. Push harder to climb the leaderboard!',
+            'priority' => 'medium',
+            'color' => '#6c757d'
+        ];
+    }
+    
+    // Recommendation 5: Incomplete tasks feedback
+    if ($tasks_incomplete > 0 && $sitins > 0) {
+        $incomplete_rate = round(($tasks_incomplete / $sitins) * 100);
+        if ($incomplete_rate >= 30) {
+            $recommendations[] = [
+                'type' => 'incomplete_tasks',
+                'icon' => 'fa-exclamation-triangle',
+                'title' => '⚠️ Address Incomplete Tasks',
+                'message' => $incomplete_rate . '% of your sessions have incomplete tasks. Review feedback and improve next session.',
+                'priority' => 'high',
+                'color' => '#dc3545'
+            ];
+        }
+    }
+    
+    // Recommendation 6: Overall score
+    if ($score >= 80) {
+        $recommendations[] = [
+            'type' => 'score',
+            'icon' => 'fa-chart-line',
+            'title' => '📊 Excellent Overall Score!',
+            'message' => 'Your overall score is ' . number_format($score, 2) . '! You\'re excelling across all metrics.',
+            'priority' => 'low',
+            'color' => '#28a745'
+        ];
+    }
+    
+    return $recommendations;
 }
 
 function getLeaderboardStyles() {
