@@ -11,6 +11,90 @@ if (!isset($_SESSION['user_id'])) {
 include "db.php";
 $id = $_SESSION['user_id'];
 
+// Create uploads directory if it doesn't exist
+$uploads_dir = 'uploads/student_photos';
+if (!is_dir($uploads_dir)) {
+    mkdir($uploads_dir, 0755, true);
+}
+
+/* ── AJAX: Upload Photo ── */
+if (isset($_POST['upload_photo'])) {
+    header('Content-Type: application/json');
+    
+    if (!isset($_FILES['photo']) || $_FILES['photo']['error'] != 0) {
+        echo json_encode(['status' => 'error', 'message' => 'No file uploaded or upload error.']);
+        exit();
+    }
+    
+    $file = $_FILES['photo'];
+    $allowed_types = ['image/jpeg', 'image/png', 'image/gif'];
+    $max_size = 5 * 1024 * 1024; // 5MB
+    
+    // Validate file type
+    if (!in_array($file['type'], $allowed_types)) {
+        echo json_encode(['status' => 'error', 'message' => 'Only JPG, PNG, and GIF files are allowed.']);
+        exit();
+    }
+    
+    // Validate file size
+    if ($file['size'] > $max_size) {
+        echo json_encode(['status' => 'error', 'message' => 'File size must not exceed 5MB.']);
+        exit();
+    }
+    
+    // Delete old photo if exists
+    $old_photo_q = $conn->prepare("SELECT PhotoPath FROM students_info WHERE IdNumber=?");
+    $old_photo_q->bind_param("s", $id);
+    $old_photo_q->execute();
+    $old_row = $old_photo_q->get_result()->fetch_assoc();
+    $old_photo_q->close();
+    
+    if ($old_row && $old_row['PhotoPath'] && file_exists($old_row['PhotoPath'])) {
+        unlink($old_row['PhotoPath']);
+    }
+    
+    // Save new photo
+    $file_ext = pathinfo($file['name'], PATHINFO_EXTENSION);
+    $new_filename = $id . '_' . time() . '.' . $file_ext;
+    $file_path = $uploads_dir . '/' . $new_filename;
+    
+    if (move_uploaded_file($file['tmp_name'], $file_path)) {
+        // Update database
+        $upd = $conn->prepare("UPDATE students_info SET PhotoPath=? WHERE IdNumber=?");
+        $upd->bind_param("ss", $file_path, $id);
+        $upd->execute();
+        $upd->close();
+        
+        echo json_encode(['status' => 'ok', 'photo_path' => $file_path]);
+    } else {
+        echo json_encode(['status' => 'error', 'message' => 'Failed to save file.']);
+    }
+    exit();
+}
+
+/* ── AJAX: Remove Photo ── */
+if (isset($_POST['remove_photo'])) {
+    header('Content-Type: application/json');
+    
+    $photo_q = $conn->prepare("SELECT PhotoPath FROM students_info WHERE IdNumber=?");
+    $photo_q->bind_param("s", $id);
+    $photo_q->execute();
+    $photo_row = $photo_q->get_result()->fetch_assoc();
+    $photo_q->close();
+    
+    if ($photo_row && $photo_row['PhotoPath'] && file_exists($photo_row['PhotoPath'])) {
+        unlink($photo_row['PhotoPath']);
+    }
+    
+    $upd = $conn->prepare("UPDATE students_info SET PhotoPath=NULL WHERE IdNumber=?");
+    $upd->bind_param("s", $id);
+    $upd->execute();
+    $upd->close();
+    
+    echo json_encode(['status' => 'ok']);
+    exit();
+}
+
 /* ── AJAX: Get occupied PCs for a lab on a date ── */
 if (isset($_GET['get_pcs'])) {
     $lab  = trim($_GET['lab']);
@@ -171,7 +255,8 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
         .card-header-gold   { background-color:var(--gold); color:#1a1a1a; font-weight:600; border-radius:12px 12px 0 0 !important; padding:10px 16px; }
 
         /* Avatar */
-        .avatar { width:82px; height:82px; border-radius:50%; background-color:var(--purple); color:white; font-size:2rem; display:flex; align-items:center; justify-content:center; margin:0 auto 0.75rem; border:4px solid #f3eaf9; }
+        .avatar { width:82px; height:82px; border-radius:50%; background-color:var(--purple); color:white; font-size:2rem; display:flex; align-items:center; justify-content:center; margin:0 auto 0.75rem; border:4px solid #f3eaf9; object-fit:cover; }
+        .avatar-img { width:82px; height:82px; border-radius:50%; object-fit:cover; border:4px solid #f3eaf9; margin:0 auto 0.75rem; display:block; }
 
         /* Info rows */
         .info-row { display:flex; justify-content:space-between; padding:7px 0; border-bottom:1px solid #f0f0f0; font-size:0.87rem; }
@@ -280,15 +365,34 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
                 </div>
                 <div class="card-body pt-4">
                     <?php if ($student): ?>
-                        <div class="avatar">
-                            <?php echo strtoupper(substr($student['FirstName'],0,1).substr($student['LastName'],0,1)); ?>
-                        </div>
+                        <?php if ($student['PhotoPath'] && file_exists($student['PhotoPath'])): ?>
+                            <img src="<?php echo htmlspecialchars($student['PhotoPath']); ?>" alt="Student Photo" class="avatar-img">
+                        <?php else: ?>
+                            <div class="avatar">
+                                <?php echo strtoupper(substr($student['FirstName'],0,1).substr($student['LastName'],0,1)); ?>
+                            </div>
+                        <?php endif; ?>
                         <h6 class="text-center fw-bold mb-1" style="color:var(--purple)">
                             <?php echo htmlspecialchars($student['FirstName'].' '.$student['LastName']); ?>
                         </h6>
                         <p class="text-center text-muted mb-3" style="font-size:0.78rem;">
                             <?php echo htmlspecialchars($student['Course']); ?> &mdash; Year <?php echo $student['CourseLevel']; ?>
                         </p>
+
+                        <!-- Upload/Remove Photo Buttons -->
+                        <div class="profile-actions" style="grid-template-columns:1fr 1fr; gap:8px; margin-bottom:1rem;">
+                            <button class="btn-action btn-action-edit" onclick="document.getElementById('photoUploadInput').click();" title="Upload Photo">
+                                <i class="fa fa-camera"></i>Upload Photo
+                            </button>
+                            <?php if ($student['PhotoPath'] && file_exists($student['PhotoPath'])): ?>
+                                <button class="btn-action" style="border-color:#dc3545;" onclick="removePhoto()" title="Remove Photo">
+                                    <i class="fa fa-trash" style="color:#dc3545;"></i>Remove Photo
+                                </button>
+                            <?php endif; ?>
+                            <input type="file" id="photoUploadInput" style="display:none;" accept="image/*" onchange="uploadPhoto(this)">
+                        </div>
+
+                        <div id="photoMessage" style="display:none; margin-bottom:1rem; padding:8px 12px; border-radius:6px; font-size:0.8rem;"></div>
 
                         <div class="info-row">
                             <span class="info-label">ID Number</span>
@@ -856,6 +960,94 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
+/* ══════════════════════════════════════
+   PHOTO UPLOAD & REMOVAL
+══════════════════════════════════════ */
+
+function uploadPhoto(input) {
+    if (!input.files || !input.files[0]) return;
+    
+    const file = input.files[0];
+    const messageEl = document.getElementById('photoMessage');
+    
+    // Validate file size (5MB max)
+    if (file.size > 5 * 1024 * 1024) {
+        showPhotoMessage('error', 'File size must not exceed 5MB.');
+        input.value = '';
+        return;
+    }
+    
+    // Validate file type
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/gif'];
+    if (!allowedTypes.includes(file.type)) {
+        showPhotoMessage('error', 'Only JPG, PNG, and GIF files are allowed.');
+        input.value = '';
+        return;
+    }
+    
+    // Show loading state
+    showPhotoMessage('info', 'Uploading photo...');
+    
+    const formData = new FormData();
+    formData.append('photo', file);
+    formData.append('upload_photo', '1');
+    
+    fetch('', {
+        method: 'POST',
+        body: formData
+    })
+    .then(r => r.json())
+    .then(data => {
+        input.value = '';
+        if (data.status === 'ok') {
+            showPhotoMessage('success', 'Photo uploaded successfully!');
+            setTimeout(() => location.reload(), 1500);
+        } else {
+            showPhotoMessage('error', data.message || 'Upload failed.');
+        }
+    })
+    .catch(err => {
+        showPhotoMessage('error', 'Upload error: ' + err.message);
+        input.value = '';
+    });
+}
+
+function removePhoto() {
+    if (!confirm('Remove your profile photo?')) return;
+    
+    showPhotoMessage('info', 'Removing photo...');
+    
+    fetch('', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'remove_photo=1'
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'ok') {
+            showPhotoMessage('success', 'Photo removed successfully!');
+            setTimeout(() => location.reload(), 1500);
+        } else {
+            showPhotoMessage('error', 'Remove failed.');
+        }
+    })
+    .catch(err => {
+        showPhotoMessage('error', 'Error: ' + err.message);
+    });
+}
+
+function showPhotoMessage(type, text) {
+    const messageEl = document.getElementById('photoMessage');
+    const bgColor = type === 'success' ? '#d4edda' : (type === 'error' ? '#f8d7da' : '#d1ecf1');
+    const textColor = type === 'success' ? '#155724' : (type === 'error' ? '#721c24' : '#0c5460');
+    const icon = type === 'success' ? 'fa-check-circle' : (type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle');
+    
+    messageEl.style.backgroundColor = bgColor;
+    messageEl.style.color = textColor;
+    messageEl.innerHTML = '<i class="fa ' + icon + ' me-2"></i>' + text;
+    messageEl.style.display = 'block';
+}
+
 // Auto-open reservations modal if there was a form submission result
 <?php if (isset($res_error) || isset($res_success)): ?>
 document.addEventListener('DOMContentLoaded', function () {
