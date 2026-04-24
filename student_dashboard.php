@@ -160,9 +160,12 @@ if (isset($_POST['submit_feedback'])) {
         $ins = $conn->prepare("INSERT INTO feedback (SessionID, StudentID, Rating, Message) VALUES (?,?,?,?)");
         $ins->bind_param("isis", $session_id, $id, $rating, $message);
         $ins->execute(); $ins->close();
+        $feedback_result = 'success';
+    } else {
+        $feedback_result = 'already';
     }
     $chk->close();
-    header("Location: student_dashboard.php"); exit();
+    header("Location: student_dashboard.php?feedback=" . $feedback_result); exit();
 }
 
 
@@ -373,7 +376,7 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
         .badge-active    { background-color:#198754; color:white; padding:3px 8px; border-radius:5px; font-size:0.78rem; }
         .badge-completed { background-color:#6c757d; color:white; padding:3px 8px; border-radius:5px; font-size:0.78rem; }
         .badge-pending   { background-color:#c09412; color:#1a1a1a; padding:3px 8px; border-radius:5px; font-size:0.78rem; }
-        .badge-approved  { background-color:#198754; color:white; padding:3px 8px; border-radius:5px; font-size:0.78rem; }
+        .badge-approved  { background-color:#0d6efd; color:white; padding:3px 8px; border-radius:5px; font-size:0.78rem; }
         .badge-cancelled { background-color:#6c757d; color:white; padding:3px 8px; border-radius:5px; font-size:0.78rem; }
 
         /* Navbar buttons */
@@ -734,6 +737,19 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
             </div>
 
             <!-- Sit-in Sessions -->
+            <?php if (isset($_GET['feedback'])): ?>
+                <?php if ($_GET['feedback'] === 'success'): ?>
+                    <div class="alert alert-success alert-dismissible fade show py-2 px-3 mb-3" style="border-radius:8px;font-size:0.88rem;">
+                        <i class="fa fa-circle-check me-2"></i>Feedback submitted successfully. Thank you!
+                        <button type="button" class="btn-close btn-close-sm" data-bs-dismiss="alert"></button>
+                    </div>
+                <?php elseif ($_GET['feedback'] === 'already'): ?>
+                    <div class="alert alert-info alert-dismissible fade show py-2 px-3 mb-3" style="border-radius:8px;font-size:0.88rem;">
+                        <i class="fa fa-circle-info me-2"></i>You have already submitted feedback for this session.
+                        <button type="button" class="btn-close btn-close-sm" data-bs-dismiss="alert"></button>
+                    </div>
+                <?php endif; ?>
+            <?php endif; ?>
             <div class="card dash-card">
                 <div class="card-header card-header-gold">
                     <i class="fa fa-clock me-2"></i>Your Sit-in Sessions
@@ -760,7 +776,13 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
                             $sessions = $ss->get_result();
                             if ($sessions && $sessions->num_rows > 0):
                                 while ($s = $sessions->fetch_assoc()):
-                                    $badge = strtolower($s['Status'])==='active' ? 'badge-active' : 'badge-completed';
+                                    $badge = match(strtolower($s['Status'])) {
+                                        'active'    => 'badge-active',
+                                        'approved'  => 'badge-approved',
+                                        'completed' => 'badge-completed',
+                                        'cancelled' => 'badge-cancelled',
+                                        default     => 'badge-completed'
+                                    };
                             ?>
                                 <tr>
                                     <td><?php echo htmlspecialchars($s['SessionDate']); ?></td>
@@ -996,7 +1018,13 @@ $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c0941
                         $hist = $hs->get_result();
                         if ($hist && $hist->num_rows > 0):
                             while ($h = $hist->fetch_assoc()):
-                                $hb = strtolower($h['Status'])==='active' ? 'badge-active' : 'badge-completed';
+                                $hb = match(strtolower($h['Status'])) {
+                                    'active'    => 'badge-active',
+                                    'approved'  => 'badge-approved',
+                                    'completed' => 'badge-completed',
+                                    'cancelled' => 'badge-cancelled',
+                                    default     => 'badge-completed'
+                                };
                         ?>
                             <tr>
                                 <td><?php echo htmlspecialchars($h['SessionDate']); ?></td>

@@ -154,8 +154,8 @@ if (isset($_POST['approve_reservation'])) {
     $r_stmt->close();
 
     if ($r_row) {
-        // Set to Active
-        $s = $conn->prepare("UPDATE sit_in_sessions SET Status='Active' WHERE SessionID=? AND Type='Reservation'");
+        // Set to Approved — becomes Active only when the actual SessionDate arrives
+        $s = $conn->prepare("UPDATE sit_in_sessions SET Status='Approved' WHERE SessionID=? AND Type='Reservation'");
         $s->bind_param("i", $rid);
         $s->execute(); $s->close();
 
@@ -192,13 +192,26 @@ if (isset($_POST['reject_reservation'])) {
 
 // Reset all sessions
 if (isset($_POST['reset_all_sessions'])) {
-    $conn->query("UPDATE sit_in_sessions SET Status='Completed', TimeOut=NOW() WHERE Status='Active'");
+    $conn->query("UPDATE sit_in_sessions SET Status='Completed', TimeOut=NOW() WHERE Status='Active' AND SessionDate=CURDATE()");
     header("Location: admin_dashboard.php?tab=sitin"); exit();
 }
 
+// ── Auto-activate approved reservations whose date+time has arrived ──────────
+// This converts Approved → Active only on the actual reservation day once the
+// scheduled TimeIn has passed, so future-date reservations stay 'Approved'.
+$conn->query(
+    "UPDATE sit_in_sessions
+     SET Status='Active'
+     WHERE Type='Reservation'
+       AND Status='Approved'
+       AND SessionDate = CURDATE()
+       AND TimeIn <= CURTIME()"
+);
+
 // ── Stats ────────────────────────────────────────────────────────────
 $total_students  = $conn->query("SELECT COUNT(*) as c FROM students_info WHERE is_admin=0")->fetch_assoc()['c'];
-$currently_sitin = $conn->query("SELECT COUNT(*) as c FROM sit_in_sessions WHERE Status='Active'")->fetch_assoc()['c'];
+// Only count sessions that are genuinely active today (not future-date approved reservations)
+$currently_sitin = $conn->query("SELECT COUNT(*) as c FROM sit_in_sessions WHERE Status='Active' AND SessionDate=CURDATE()")->fetch_assoc()['c'];
 $total_sitin     = $conn->query("SELECT COUNT(*) as c FROM sit_in_sessions")->fetch_assoc()['c'];
 $pending_res     = $conn->query("SELECT COUNT(*) as c FROM sit_in_sessions WHERE Type='Reservation' AND Status='Pending'")->fetch_assoc()['c'];
 
@@ -1128,7 +1141,8 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                         while ($r = $rvq->fetch_assoc()):
                             $rbadge = match(strtolower($r['Status'])) {
                                 'pending'   => 'background:#c09412;color:#1a1a1a;',
-                                'approved'  => 'background:#198754;color:white;',
+                                'approved'  => 'background:#0d6efd;color:white;',
+                                'active'    => 'background:#198754;color:white;',
                                 'cancelled' => 'background:#6c757d;color:white;',
                                 default     => 'background:#c09412;color:#1a1a1a;'
                             };
