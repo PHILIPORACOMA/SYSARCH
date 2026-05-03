@@ -373,8 +373,18 @@ include "leaderboard_helper.php";
                 <a class="nav-link active-link" href="Landingpage.php">Home</a>
                 <a class="nav-link" href="About.php">About</a>
                 <a class="nav-link" href="Community.php">Community</a>
-                <a class="nav-link" href="Loginpage.php">Login</a>
-                <a class="nav-link" href="Register.php">Register</a>
+                <?php if (isset($_SESSION['user_id'])): ?>
+                    <span class="text-white me-1" style="font-size:0.88rem;">Welcome, <b><?php echo htmlspecialchars($_SESSION['user_name']); ?></b></span>
+                    <?php if (isset($_SESSION['is_admin']) && $_SESSION['is_admin']): ?>
+                        <a class="nav-link" href="admin_dashboard.php" style="background:rgba(255,255,255,0.15);border:1.5px solid rgba(255,255,255,0.3);border-radius:7px;font-size:0.85rem;padding:0.3rem 0.9rem;"><i class="fa fa-gauge me-1"></i>Dashboard</a>
+                    <?php else: ?>
+                        <a class="nav-link" href="student_dashboard.php" style="background:rgba(255,255,255,0.15);border:1.5px solid rgba(255,255,255,0.3);border-radius:7px;font-size:0.85rem;padding:0.3rem 0.9rem;"><i class="fa fa-gauge me-1"></i>Dashboard</a>
+                    <?php endif; ?>
+                    <a class="nav-link" href="logout.php" style="background:#c09412;color:#1a1a1a !important;border:none;border-radius:7px;font-size:0.85rem;padding:0.3rem 0.9rem;"><i class="fa fa-right-from-bracket me-1"></i>Logout</a>
+                <?php else: ?>
+                    <a class="nav-link" href="Loginpage.php">Login</a>
+                    <a class="nav-link" href="Register.php">Register</a>
+                <?php endif; ?>
             </div>
         </div>
     </nav>
@@ -534,6 +544,38 @@ include "leaderboard_helper.php";
                             <div class="rule-text">Unauthorized installation of software or modification of system settings is strictly prohibited.</div>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- LEADERBOARD SECTION -->
+    <section style="background:#f8f9fa; padding:56px 0;">
+        <div class="container">
+            <div class="row justify-content-center mb-4">
+                <div class="col-lg-8 text-center">
+                    <span style="font-size:0.75rem;text-transform:uppercase;letter-spacing:0.1em;color:var(--gold);font-weight:700;">
+                        Hall of Fame
+                    </span>
+                    <h2 style="color:var(--purple);font-weight:800;font-size:1.6rem;margin-top:4px;">
+                        <i class="fa fa-ranking-star me-2"></i>Top Students Leaderboard
+                    </h2>
+                    <p style="color:#888;font-size:0.88rem;">
+                        Rankings based on lab hours (30%), sit-in sessions (50%), and tasks completed (20%).
+                    </p>
+                </div>
+            </div>
+            <div class="row justify-content-center">
+                <div class="col-lg-9">
+                    <div style="overflow-x:auto; border-radius:14px; box-shadow:0 4px 20px rgba(92,43,122,0.1);">
+                        <?php
+                        $leaderboard = getLeaderboardData($conn, 10);
+                        displayLeaderboard($leaderboard, false);
+                        ?>
+                    </div>
+                    <?php if (empty($leaderboard)): ?>
+                        <p class="text-center text-muted mt-3" style="font-size:0.88rem;">No leaderboard data yet. Be the first to rack up sessions!</p>
+                    <?php endif; ?>
                 </div>
             </div>
         </div>

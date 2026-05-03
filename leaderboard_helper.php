@@ -358,9 +358,9 @@ function getLeaderboardStyles() {
         
         .rank-col { width: 80px; }
         .name-col { flex: 1; min-width: 180px; }
-        .course-col { width: 140px; }
+        .course-col { width: 110px; max-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .score-col { width: 100px; text-align: right; }
-        .detail-col { width: 90px; text-align: center; }
+        .detail-col { width: 70px; text-align: center; }
         
         .leaderboard-table tbody tr {
             border-bottom: 1px solid #f0f0f0;
@@ -521,4 +521,3 @@ function getLeaderboardStyles() {
     </style>
     CSS;
 }
-?>

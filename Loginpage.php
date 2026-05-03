@@ -23,6 +23,7 @@ if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] == "POST") {
         session_regenerate_id(true);
         $_SESSION['user_id']       = $user['IdNumber'];
         $_SESSION['user_name']     = $user['FirstName'] . ' ' . $user['LastName'];
+        $_SESSION['is_admin']      = (int)$user['is_admin'];
         $_SESSION['login_success'] = true;
         $_SESSION['login_time']    = time(); // Session start time
         $_SESSION['last_activity'] = time(); // Last activity time

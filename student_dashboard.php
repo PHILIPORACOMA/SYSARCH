@@ -268,6 +268,28 @@ $credits_left    = max(0, $max_credits - $used_sessions);
 $credits_percent = $max_credits > 0 ? round(($credits_left / $max_credits) * 100) : 0;
 $credits_color   = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c09412' : '#dc3545');
 
+
+/* ── Sit-in Summary Stats ── */
+$summary_stmt = $conn->prepare("
+    SELECT
+        COUNT(*) as total_sessions,
+        COALESCE(SUM(CASE WHEN TimeOut IS NOT NULL THEN TIMESTAMPDIFF(MINUTE, TimeIn, TimeOut) ELSE 0 END), 0) as total_minutes,
+        COALESCE(MAX(CASE WHEN TimeOut IS NOT NULL THEN TIMESTAMPDIFF(MINUTE, TimeIn, TimeOut) ELSE 0 END), 0) as max_minutes
+    FROM sit_in_sessions
+    WHERE StudentID=? AND Status='Completed'
+");
+$summary_stmt->bind_param("s", $id);
+$summary_stmt->execute();
+$summary = $summary_stmt->get_result()->fetch_assoc();
+$summary_stmt->close();
+$sum_sessions  = (int)($summary['total_sessions'] ?? 0);
+$sum_minutes   = (int)($summary['total_minutes'] ?? 0);
+$sum_hours     = round($sum_minutes / 60, 1);
+$avg_minutes   = $sum_sessions > 0 ? round($sum_minutes / $sum_sessions) : 0;
+$avg_fmt       = ($avg_minutes >= 60) ? floor($avg_minutes/60).'h '.($avg_minutes%60).'m' : $avg_minutes.'m';
+$max_minutes   = (int)($summary['max_minutes'] ?? 0);
+$max_fmt       = ($max_minutes >= 60) ? floor($max_minutes/60).'h '.($max_minutes%60).'m' : $max_minutes.'m';
+
 /* ── AI Recommendations ── */
 $recommendations = getStudentRecommendations($conn, $id);
 
@@ -742,6 +764,41 @@ if ($show_recommendations && !empty($recommendations)) {
         <!-- ════ RIGHT COLUMN ════ -->
         <div class="col-md-8">
 
+                        <!-- Sit-in Summary -->
+            <div class="card dash-card mb-4">
+                <div class="card-header card-header-purple">
+                    <i class="fa fa-chart-bar me-2"></i>Your Sit-in Summary
+                </div>
+                <div class="card-body p-3">
+                    <div class="row g-2 text-center">
+                        <div class="col-6 col-sm-3">
+                            <div style="background:#f3eaf9;border-radius:10px;padding:12px 8px;">
+                                <div style="font-size:1.5rem;font-weight:800;color:var(--purple);line-height:1;"><?php echo number_format($sum_hours, 1); ?></div>
+                                <div style="font-size:0.7rem;color:#999;margin-top:3px;text-transform:uppercase;letter-spacing:0.04em;">Total Hours</div>
+                            </div>
+                        </div>
+                        <div class="col-6 col-sm-3">
+                            <div style="background:#f3eaf9;border-radius:10px;padding:12px 8px;">
+                                <div style="font-size:1.5rem;font-weight:800;color:var(--purple);line-height:1;"><?php echo $sum_sessions; ?></div>
+                                <div style="font-size:0.7rem;color:#999;margin-top:3px;text-transform:uppercase;letter-spacing:0.04em;">Sessions</div>
+                            </div>
+                        </div>
+                        <div class="col-6 col-sm-3">
+                            <div style="background:#fdf6e3;border-radius:10px;padding:12px 8px;">
+                                <div style="font-size:1.5rem;font-weight:800;color:var(--gold);line-height:1;"><?php echo $avg_fmt ?: '—'; ?></div>
+                                <div style="font-size:0.7rem;color:#999;margin-top:3px;text-transform:uppercase;letter-spacing:0.04em;">Avg Duration</div>
+                            </div>
+                        </div>
+                        <div class="col-6 col-sm-3">
+                            <div style="background:#fdf6e3;border-radius:10px;padding:12px 8px;">
+                                <div style="font-size:1.5rem;font-weight:800;color:var(--gold);line-height:1;"><?php echo $max_fmt ?: '—'; ?></div>
+                                <div style="font-size:0.7rem;color:#999;margin-top:3px;text-transform:uppercase;letter-spacing:0.04em;">Longest Session</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Announcements -->
             <div class="card dash-card mb-4">
                 <div class="card-header card-header-purple">
@@ -787,7 +844,7 @@ if ($show_recommendations && !empty($recommendations)) {
                         <table class="table table-hover mb-0">
                             <thead>
                                 <tr>
-                                    <th>Date</th><th>Purpose</th><th>Lab</th><th>Time In</th><th>Time Out</th><th>Status</th><th>Feedback</th>
+                                    <th>Date</th><th>Time In</th><th>Time Out</th><th>Duration</th><th>PC #</th><th>Status</th><th>Feedback</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -1028,13 +1085,14 @@ if ($show_recommendations && !empty($recommendations)) {
             <div class="modal-body p-0">
                 <div class="table-responsive">
                     <table class="table table-hover mb-0">
+                        
                         <thead>
                             <tr>
                                 <th style="background:var(--purple);color:white;">Date</th>
-                                <th style="background:var(--purple);color:white;">Purpose</th>
-                                <th style="background:var(--purple);color:white;">Lab</th>
                                 <th style="background:var(--purple);color:white;">Time In</th>
                                 <th style="background:var(--purple);color:white;">Time Out</th>
+                                <th style="background:var(--purple);color:white;">Duration</th>
+                                <th style="background:var(--purple);color:white;">PC #</th>
                                 <th style="background:var(--purple);color:white;">Status</th>
                             </tr>
                         </thead>
@@ -1054,12 +1112,13 @@ if ($show_recommendations && !empty($recommendations)) {
                                     default     => 'badge-completed'
                                 };
                         ?>
+                            
                             <tr>
                                 <td><?php echo htmlspecialchars($h['SessionDate']); ?></td>
-                                <td><?php echo htmlspecialchars($h['Purpose'] ?? '—'); ?></td>
-                                <td><?php echo htmlspecialchars($h['Lab'] ?? '—'); ?></td>
-                                <td><?php echo htmlspecialchars($h['TimeIn']); ?></td>
-                                <td><?php echo $h['TimeOut'] ? htmlspecialchars($h['TimeOut']) : '<span class="text-muted">—</span>'; ?></td>
+                                <td><?php echo substr($h['TimeIn'], 0, 5); ?></td>
+                                <td><?php echo $h['TimeOut'] ? substr($h['TimeOut'], 0, 5) : '<span class="text-muted">—</span>'; ?></td>
+                                <td><?php if ($h['TimeOut']) { $diff = round(max(0, (strtotime($h['TimeOut']) - strtotime($h['TimeIn'])) / 60)); echo ($diff >= 60) ? floor($diff/60).'h '.($diff%60).'m' : $diff.'m'; } else echo '<span class="text-muted">—</span>'; ?></td>
+                                <td><?php echo $h['PCNumber'] ? 'PC '.$h['PCNumber'] : '<span class="text-muted">—</span>'; ?></td>
                                 <td><span class="<?= $hb ?>"><?php echo htmlspecialchars($h['Status']); ?></span></td>
                             </tr>
                         <?php endwhile; else: ?>
