@@ -43,13 +43,12 @@ function getLeaderboardData($conn, $limit = 10) {
             $hours_score = min(($hours / $max_hours) * 100, 100) * 0.30;
             
             // 50% - Sit-ins (every 3 sit-ins = 1 point, normalize to 100 max)
-            // total_sitins / 3 gives us points, max 100 points = 300 sit-ins
             $sitin_points = floor($row['total_sitins'] / 3);
-            $max_sitin_points = 100; // 100 points as max reference (300 sit-ins)
+            $max_sitin_points = 100; 
             $sitin_score = min(($sitin_points / $max_sitin_points) * 100, 100) * 0.50;
             
-            // 20% - Tasks completed (count sit-ins where task was completed, normalize to 100 max)
-            $max_tasks = 100; // 100 completed tasks as max reference
+            // 20% - Tasks completed
+            $max_tasks = 100; 
             $tasks_score = min(($row['tasks_completed'] / $max_tasks) * 100, 100) * 0.20;
             
             $total_score = round($hours_score + $sitin_score + $tasks_score, 2);
@@ -61,12 +60,8 @@ function getLeaderboardData($conn, $limit = 10) {
                 'course' => $row['Course'],
                 'photo_path' => $row['PhotoPath'],
                 'total_score' => $total_score,
-                'hours_score' => round($hours_score, 2),
-                'sitin_score' => round($sitin_score, 2),
-                'tasks_score' => round($tasks_score, 2),
                 'hours' => $hours,
                 'sitin_points' => $sitin_points,
-                'sitins' => $row['total_sitins'],
                 'tasks_completed' => $row['tasks_completed']
             ];
             $rank++;
@@ -78,28 +73,137 @@ function getLeaderboardData($conn, $limit = 10) {
         return $b['total_score'] <=> $a['total_score'];
     });
     
+    // Re-assign ranks after sorting
+    foreach ($leaderboard as $index => &$entry) {
+        $entry['rank'] = $index + 1;
+    }
+    
     return array_slice($leaderboard, 0, $limit);
 }
 
 function getStudentLeaderboardRank($conn, $student_id) {
     $leaderboard = getLeaderboardData($conn, 1000);
-    
     foreach ($leaderboard as $index => $student) {
         if ($student['id'] === $student_id) {
             return [
-                'rank' => $index + 1,
+                'rank' => $student['rank'],
                 'total_rank' => count($leaderboard),
                 'score' => $student['total_score']
             ];
         }
     }
-    
     return null;
 }
 
+function getLeaderboardStyles() {
+    return <<<CSS
+    <style>
+        .leaderboard-container {
+            background: rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            box-shadow: 0 8px 32px rgba(31, 38, 135, 0.05);
+            margin-bottom: 20px;
+        }
+
+        .leaderboard-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            font-size: 0.9rem;
+        }
+
+        .leaderboard-table thead {
+            background: rgba(92, 43, 122, 0.03);
+            color: #5c2b7a;
+        }
+
+        .leaderboard-table thead th {
+            padding: 16px 20px;
+            text-align: left;
+            font-weight: 800;
+            text-transform: uppercase;
+            font-size: 0.7rem;
+            letter-spacing: 1px;
+            border-bottom: 1px solid rgba(0,0,0,0.05);
+        }
+
+        .leaderboard-table tbody tr { transition: all 0.2s ease; }
+        .leaderboard-table tbody tr:hover { background: rgba(255, 255, 255, 0.8); }
+
+        .leaderboard-table td {
+            padding: 12px 20px;
+            border-bottom: 1px solid rgba(0,0,0,0.02);
+            vertical-align: middle;
+        }
+
+        /* Column Widths */
+        .rank-col { width: 90px; text-align: center !important; }
+        .name-col { min-width: 200px; }
+        .course-col { width: 150px; }
+        .score-col { width: 120px; text-align: right !important; }
+        .detail-col { width: 80px; text-align: center !important; color: #64748b; font-size: 0.75rem; font-weight: 600; }
+
+        .rank-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 34px; height: 34px;
+            border-radius: 12px;
+            font-weight: 800;
+            font-size: 0.85rem;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+        }
+        
+        .rank-badge.gold { background: linear-gradient(135deg, #ffd700, #ffc107); color: #000; }
+        .rank-badge.silver { background: linear-gradient(135deg, #e2e8f0, #cbd5e1); color: #475569; }
+        .rank-badge.bronze { background: linear-gradient(135deg, #fed7aa, #fdba74); color: #9a3412; }
+        .rank-number { background: #f3eaf9; color: #5c2b7a; border-radius: 10px; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; font-weight: 800; }
+
+        .student-info { display: flex; align-items: center; gap: 12px; }
+        
+        .student-avatar, .student-avatar-initials {
+            width: 38px; height: 38px; border-radius: 12px;
+            object-fit: cover; box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+            border: 2px solid white; flex-shrink: 0;
+        }
+        
+        .student-avatar-initials {
+            background: linear-gradient(135deg, #5c2b7a 0%, #7b3da3 100%);
+            color: white; display: flex; align-items: center; justify-content: center;
+            font-weight: 800; font-size: 0.9rem;
+        }
+        
+        .student-name { font-weight: 700; color: #2d3436; font-size: 0.9rem; }
+        .course-text { font-size: 0.8rem; color: #64748b; font-weight: 600; }
+        
+        .score-badge {
+            background: #5c2b7a; color: white;
+            padding: 6px 14px; border-radius: 10px;
+            font-weight: 800; font-size: 0.85rem;
+            box-shadow: 0 4px 12px rgba(92, 43, 122, 0.15);
+        }
+
+        @media (max-width: 768px) {
+            .course-col, .detail-col { display: none; }
+            .leaderboard-table td, .leaderboard-table th { padding: 10px 15px; }
+            .name-col { min-width: 150px; }
+        }
+    </style>
+CSS;
+}
+
 function displayLeaderboard($leaderboard, $show_details = false, $class_name = '') {
+    static $styles_printed = false;
+    if (!$styles_printed) {
+        echo getLeaderboardStyles();
+        $styles_printed = true;
+    }
+    
     if (empty($leaderboard)) {
-        echo '<p class="text-center text-muted" style="padding: 20px;">No leaderboard data available.</p>';
+        echo '<div class="text-center py-5 text-muted small fw-600"><i class="fa-solid fa-ranking-star opacity-25 me-2"></i>No data available.</div>';
         return;
     }
     ?>
@@ -110,29 +214,29 @@ function displayLeaderboard($leaderboard, $show_details = false, $class_name = '
                     <th class="rank-col">Rank</th>
                     <th class="name-col">Student</th>
                     <th class="course-col">Course</th>
-                    <th class="score-col">Score</th>
+                    <th class="score-col">Total Score</th>
                     <?php if ($show_details): ?>
                         <th class="detail-col">Hours</th>
-                        <th class="detail-col">Sit-ins Pts</th>
-                        <th class="detail-col">Tasks Done</th>
+                        <th class="detail-col">Points</th>
+                        <th class="detail-col">Tasks</th>
                     <?php endif; ?>
                 </tr>
             </thead>
             <tbody>
                 <?php foreach ($leaderboard as $entry): ?>
-                    <tr class="leaderboard-row <?php echo $entry['rank'] <= 3 ? 'top-rank rank-' . $entry['rank'] : ''; ?>">
-                        <td class="rank-cell">
+                    <tr>
+                        <td class="rank-col">
                             <?php if ($entry['rank'] == 1): ?>
-                                <span class="rank-badge gold"><i class="fa fa-crown"></i> 1st</span>
+                                <span class="rank-badge gold"><i class="fa fa-crown"></i></span>
                             <?php elseif ($entry['rank'] == 2): ?>
-                                <span class="rank-badge silver"><i class="fa fa-medal"></i> 2nd</span>
+                                <span class="rank-badge silver"><i class="fa fa-medal"></i></span>
                             <?php elseif ($entry['rank'] == 3): ?>
-                                <span class="rank-badge bronze"><i class="fa fa-medal"></i> 3rd</span>
+                                <span class="rank-badge bronze"><i class="fa fa-medal"></i></span>
                             <?php else: ?>
                                 <span class="rank-number"><?php echo $entry['rank']; ?></span>
                             <?php endif; ?>
                         </td>
-                        <td class="name-cell">
+                        <td class="name-col">
                             <div class="student-info">
                                 <?php if ($entry['photo_path'] && file_exists($entry['photo_path'])): ?>
                                     <img src="<?php echo htmlspecialchars($entry['photo_path']); ?>" alt="Photo" class="student-avatar">
@@ -144,20 +248,14 @@ function displayLeaderboard($leaderboard, $show_details = false, $class_name = '
                                 <span class="student-name"><?php echo htmlspecialchars($entry['name']); ?></span>
                             </div>
                         </td>
-                        <td class="course-cell"><?php echo htmlspecialchars($entry['course']); ?></td>
-                        <td class="score-cell">
+                        <td class="course-col"><span class="course-text"><?php echo htmlspecialchars($entry['course']); ?></span></td>
+                        <td class="score-col">
                             <span class="score-badge"><?php echo number_format($entry['total_score'], 2); ?></span>
                         </td>
                         <?php if ($show_details): ?>
-                            <td class="detail-cell">
-                                <small><?php echo number_format($entry['hours'], 1); ?>h</small>
-                            </td>
-                            <td class="detail-cell">
-                                <small><?php echo $entry['sitin_points']; ?> pts</small>
-                            </td>
-                            <td class="detail-cell">
-                                <small><?php echo $entry['tasks_completed']; ?> done</small>
-                            </td>
+                            <td class="detail-col"><?php echo number_format($entry['hours'], 1); ?>h</td>
+                            <td class="detail-col"><?php echo $entry['sitin_points']; ?></td>
+                            <td class="detail-col"><?php echo $entry['tasks_completed']; ?></td>
                         <?php endif; ?>
                     </tr>
                 <?php endforeach; ?>
@@ -169,7 +267,6 @@ function displayLeaderboard($leaderboard, $show_details = false, $class_name = '
 
 /**
  * Get AI Recommendations for a Student
- * Analyzes student performance and generates personalized suggestions
  */
 function getStudentRecommendations($conn, $student_id) {
     $recommendations = [];
@@ -190,10 +287,7 @@ function getStudentRecommendations($conn, $student_id) {
     $stats = $stmt->get_result()->fetch_assoc();
     $stmt->close();
     
-    // Get leaderboard rank
     $rank_info = getStudentLeaderboardRank($conn, $student_id);
-    
-    // Get total students
     $total_students = $conn->query("SELECT COUNT(*) as c FROM students_info WHERE is_admin=0")->fetch_assoc()['c'];
     
     $hours = $stats['total_minutes'] ? round($stats['total_minutes'] / 60, 1) : 0;
@@ -204,320 +298,38 @@ function getStudentRecommendations($conn, $student_id) {
     $rank = $rank_info['rank'] ?? 999;
     $score = $rank_info['score'] ?? 0;
     
-    // Recommendation 1: Hours
     if ($hours < 10) {
         $recommendations[] = [
-            'type' => 'hours',
-            'icon' => 'fa-clock',
-            'title' => '⏱️ Increase Lab Hours',
-            'message' => 'You have ' . $hours . ' hours. Try to reach at least 20 hours for better lab experience and skills.',
-            'priority' => 'high',
-            'color' => '#dc3545'
-        ];
-    } elseif ($hours >= 50) {
-        $recommendations[] = [
-            'type' => 'hours',
-            'icon' => 'fa-star',
-            'title' => '⭐ Excellent Dedication!',
-            'message' => 'You\'ve logged ' . $hours . ' hours in the lab! Keep maintaining this excellent habit.',
-            'priority' => 'low',
-            'color' => '#28a745'
+            'type' => 'hours', 'icon' => 'fa-clock', 'title' => '⏱️ Increase Lab Hours',
+            'message' => 'You have ' . $hours . ' hours. Try to reach at least 20 hours for better lab experience.',
+            'priority' => 'high', 'color' => '#dc3545'
         ];
     }
     
-    // Recommendation 2: Sit-ins (every 3 = 1 point)
-    $sitin_points = floor($sitins / 3);
     if ($sitins < 12) {
         $recommendations[] = [
-            'type' => 'sitins',
-            'icon' => 'fa-chair',
-            'title' => '🪑 More Sit-in Sessions',
-            'message' => 'You\'ve completed ' . $sitins . ' sit-ins (' . $sitin_points . ' points). Target 30 sit-ins for maximum points.',
-            'priority' => 'high',
-            'color' => '#ff6b6b'
-        ];
-    } elseif ($sitins >= 30) {
-        $recommendations[] = [
-            'type' => 'sitins',
-            'icon' => 'fa-trophy',
-            'title' => '🏆 Outstanding Attendance!',
-            'message' => 'You\'ve had ' . $sitins . ' sit-ins! This shows great commitment to your lab work.',
-            'priority' => 'low',
-            'color' => '#ffc107'
+            'type' => 'sitins', 'icon' => 'fa-chair', 'title' => '🪑 More Sit-in Sessions',
+            'message' => 'You\'ve completed ' . $sitins . ' sit-ins. Target 30 sit-ins for maximum leaderboard points.',
+            'priority' => 'medium', 'color' => '#ff6b6b'
         ];
     }
     
-    // Recommendation 3: Task Completion
-    if ($task_completion_rate < 50) {
+    if ($task_completion_rate < 50 && $sitins > 0) {
         $recommendations[] = [
-            'type' => 'tasks',
-            'icon' => 'fa-check-circle',
-            'title' => '✓ Focus on Task Completion',
-            'message' => 'Only ' . $task_completion_rate . '% of your tasks are completed. Try to complete all assigned tasks during sessions.',
-            'priority' => 'high',
-            'color' => '#fd7e14'
-        ];
-    } elseif ($task_completion_rate >= 85) {
-        $recommendations[] = [
-            'type' => 'tasks',
-            'icon' => 'fa-star',
-            'title' => '⭐ Great Task Completion!',
-            'message' => $task_completion_rate . '% task completion rate! You\'re doing excellent work.',
-            'priority' => 'low',
-            'color' => '#28a745'
+            'type' => 'tasks', 'icon' => 'fa-check-circle', 'title' => '✓ Focus on Tasks',
+            'message' => 'Only ' . $task_completion_rate . '% of your tasks are completed. Try to finish all assigned tasks.',
+            'priority' => 'high', 'color' => '#fd7e14'
         ];
     }
     
-    // Recommendation 4: Leaderboard Rank
     if ($rank <= 3) {
         $recommendations[] = [
-            'type' => 'rank',
-            'icon' => 'fa-crown',
-            'title' => '👑 Top Performer!',
-            'message' => 'You\'re ranked #' . $rank . ' on the leaderboard! Outstanding performance!',
-            'priority' => 'low',
-            'color' => '#ffc107'
-        ];
-    } elseif ($rank <= 10) {
-        $recommendations[] = [
-            'type' => 'rank',
-            'icon' => 'fa-medal',
-            'title' => '🎖️ Top 10 Achiever',
-            'message' => 'You\'re in the top 10 with rank #' . $rank . '! Keep up the great work!',
-            'priority' => 'low',
-            'color' => '#17a2b8'
-        ];
-    } elseif ($rank > ($total_students * 0.75)) {
-        $recommendations[] = [
-            'type' => 'rank',
-            'icon' => 'fa-arrow-up',
-            'title' => '📈 Room for Improvement',
-            'message' => 'You\'re ranked #' . $rank . '. Push harder to climb the leaderboard!',
-            'priority' => 'medium',
-            'color' => '#6c757d'
-        ];
-    }
-    
-    // Recommendation 5: Incomplete tasks feedback
-    if ($tasks_incomplete > 0 && $sitins > 0) {
-        $incomplete_rate = round(($tasks_incomplete / $sitins) * 100);
-        if ($incomplete_rate >= 30) {
-            $recommendations[] = [
-                'type' => 'incomplete_tasks',
-                'icon' => 'fa-exclamation-triangle',
-                'title' => '⚠️ Address Incomplete Tasks',
-                'message' => $incomplete_rate . '% of your sessions have incomplete tasks. Review feedback and improve next session.',
-                'priority' => 'high',
-                'color' => '#dc3545'
-            ];
-        }
-    }
-    
-    // Recommendation 6: Overall score
-    if ($score >= 80) {
-        $recommendations[] = [
-            'type' => 'score',
-            'icon' => 'fa-chart-line',
-            'title' => '📊 Excellent Overall Score!',
-            'message' => 'Your overall score is ' . number_format($score, 2) . '! You\'re excelling across all metrics.',
-            'priority' => 'low',
-            'color' => '#28a745'
+            'type' => 'rank', 'icon' => 'fa-crown', 'title' => '👑 Top Performer!',
+            'message' => 'You\'re ranked #' . $rank . ' on the leaderboard! Keep it up!',
+            'priority' => 'low', 'color' => '#ffc107'
         ];
     }
     
     return $recommendations;
 }
-
-function getLeaderboardStyles() {
-    return <<<CSS
-    <style>
-        .leaderboard-container {
-            background: white;
-            border-radius: 12px;
-            overflow: hidden;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-        }
-        
-        .leaderboard-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.9rem;
-        }
-        
-        .leaderboard-table thead {
-            background-color: #5c2b7a;
-            color: white;
-            font-weight: 600;
-        }
-        
-        .leaderboard-table thead th {
-            padding: 12px 16px;
-            text-align: left;
-            border: none;
-        }
-        
-        .rank-col { width: 80px; }
-        .name-col { flex: 1; min-width: 180px; }
-        .course-col { width: 110px; max-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-        .score-col { width: 100px; text-align: right; }
-        .detail-col { width: 70px; text-align: center; }
-        
-        .leaderboard-table tbody tr {
-            border-bottom: 1px solid #f0f0f0;
-            transition: background-color 0.2s;
-        }
-        
-        .leaderboard-table tbody tr:hover {
-            background-color: #f8f4fc;
-        }
-        
-        .leaderboard-table tbody tr.top-rank {
-            background-color: #faf6ff;
-        }
-        
-        .leaderboard-table tbody tr.rank-1 {
-            border-left: 4px solid #ffc107;
-        }
-        
-        .leaderboard-table tbody tr.rank-2 {
-            border-left: 4px solid #c0c0c0;
-        }
-        
-        .leaderboard-table tbody tr.rank-3 {
-            border-left: 4px solid #cd7f32;
-        }
-        
-        .leaderboard-table td {
-            padding: 12px 16px;
-        }
-        
-        .rank-cell {
-            text-align: center;
-            font-weight: 600;
-        }
-        
-        .rank-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 4px 10px;
-            border-radius: 6px;
-            font-size: 0.85rem;
-            font-weight: 700;
-            color: white;
-        }
-        
-        .rank-badge.gold {
-            background-color: #ffc107;
-            color: #1a1a1a;
-        }
-        
-        .rank-badge.silver {
-            background-color: #c0c0c0;
-            color: #1a1a1a;
-        }
-        
-        .rank-badge.bronze {
-            background-color: #cd7f32;
-            color: white;
-        }
-        
-        .rank-number {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 28px;
-            height: 28px;
-            border-radius: 50%;
-            background-color: #5c2b7a;
-            color: white;
-            font-weight: 700;
-            font-size: 0.85rem;
-        }
-        
-        .student-info {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        
-        .student-avatar {
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid #e0e0e0;
-        }
-        
-        .student-avatar-initials {
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            background-color: #5c2b7a;
-            color: white;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 700;
-            font-size: 0.9rem;
-        }
-        
-        .student-name {
-            font-weight: 600;
-            color: #333;
-        }
-        
-        .course-cell {
-            font-size: 0.85rem;
-            color: #666;
-        }
-        
-        .score-cell {
-            text-align: right;
-            font-weight: 700;
-        }
-        
-        .score-badge {
-            display: inline-block;
-            background-color: #5c2b7a;
-            color: white;
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-weight: 600;
-            font-size: 0.9rem;
-        }
-        
-        .detail-cell {
-            text-align: center;
-            color: #666;
-            font-size: 0.85rem;
-        }
-        
-        .detail-cell small {
-            display: block;
-        }
-        
-        @media (max-width: 768px) {
-            .leaderboard-table thead {
-                font-size: 0.8rem;
-            }
-            
-            .leaderboard-table td {
-                padding: 10px 8px;
-                font-size: 0.85rem;
-            }
-            
-            .course-col {
-                display: none;
-            }
-            
-            .detail-col {
-                display: none;
-            }
-            
-            .rank-col { width: 60px; }
-            .score-col { width: 80px; }
-        }
-    </style>
-    CSS;
-}
+?>

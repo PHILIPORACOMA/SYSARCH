@@ -1,25 +1,40 @@
 <?php
-$servername = "localhost";
-$username   = "root";
-$password   = "";
-$dbname     = "sysarchstudents";
+require_once 'config.php';
 
-$conn = new mysqli($servername, $username, $password, $dbname);
+$conn = new mysqli(DB_SERVER, DB_USERNAME, DB_PASSWORD, DB_NAME);
 
 if ($conn->connect_error) {
     die("Connection failed: " . $conn->connect_error);
 }
 
-// ── SESSION TIMEOUT MANAGEMENT (2 hours) ──
-if (isset($_SESSION['login_time'])) {
-    $session_timeout = 2 * 60 * 60; // 2 hours in seconds
+// ── SESSION TIMEOUT MANAGEMENT ──
+if (session_status() === PHP_SESSION_ACTIVE && isset($_SESSION['login_time'])) {
     $elapsed_time = time() - $_SESSION['login_time'];
     
-    if ($elapsed_time > $session_timeout) {
-        // Session expired - destroy it
+    if ($elapsed_time > SESSION_TIMEOUT) {
+        session_unset();
         session_destroy();
         header("Location: Loginpage.php?session_expired=1");
         exit();
     }
+}
+
+// ── CSRF PROTECTION ──
+if (session_status() === PHP_SESSION_ACTIVE) {
+    if (empty($_SESSION['csrf_token'])) {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    }
+}
+
+function get_csrf_token() {
+    return $_SESSION['csrf_token'] ?? '';
+}
+
+function verify_csrf_token($token) {
+    return isset($_SESSION['csrf_token']) && hash_equals($_SESSION['csrf_token'], (string)$token);
+}
+
+function csrf_input() {
+    echo '<input type="hidden" name="csrf_token" value="' . htmlspecialchars(get_csrf_token()) . '">';
 }
 ?>

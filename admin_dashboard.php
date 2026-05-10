@@ -16,7 +16,7 @@ $chk = $conn->prepare("SELECT is_admin FROM students_info WHERE IdNumber = ?");
 $chk->bind_param("s", $_SESSION['user_id']);
 $chk->execute();
 $chk_row = $chk->get_result()->fetch_assoc();
-$chk->close();
+$chk_close = $chk->close();
 
 if (!$chk_row || !$chk_row['is_admin']) {
     header("Location: student_dashboard.php");
@@ -24,6 +24,12 @@ if (!$chk_row || !$chk_row['is_admin']) {
 }
 
 // ── Handle POST actions ──────────────────────────────────────────────
+
+if ($_SERVER["REQUEST_METHOD"] == "POST") {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("CSRF token validation failed.");
+    }
+}
 
 // Update lab PC count
 if (isset($_POST['update_lab'])) {
@@ -66,7 +72,7 @@ if (isset($_POST['post_announcement'])) {
         $s->bind_param("ss", $title, $message);
         $s->execute(); $s->close();
     }
-    header("Location: admin_dashboard.php"); exit();
+    header("Location: admin_dashboard.php?tab=announcements"); exit();
 }
 
 // Delete announcement
@@ -75,7 +81,7 @@ if (isset($_POST['delete_announcement'])) {
     $s = $conn->prepare("DELETE FROM announcements WHERE AnnouncementID = ?");
     $s->bind_param("i", $aid);
     $s->execute(); $s->close();
-    header("Location: admin_dashboard.php"); exit();
+    header("Location: admin_dashboard.php?tab=announcements"); exit();
 }
 
 // Edit student
@@ -146,20 +152,15 @@ if (isset($_GET['search_student'])) {
 // Approve reservation
 if (isset($_POST['approve_reservation'])) {
     $rid = (int)$_POST['res_id'];
-    // Get reservation details first
     $r_stmt = $conn->prepare("SELECT StudentID, SessionDate, Lab, Purpose FROM sit_in_sessions WHERE SessionID=? AND Type='Reservation'");
     $r_stmt->bind_param("i", $rid);
     $r_stmt->execute();
     $r_row = $r_stmt->get_result()->fetch_assoc();
     $r_stmt->close();
-
     if ($r_row) {
-        // Set to Approved — becomes Active only when the actual SessionDate arrives
         $s = $conn->prepare("UPDATE sit_in_sessions SET Status='Approved' WHERE SessionID=? AND Type='Reservation'");
         $s->bind_param("i", $rid);
         $s->execute(); $s->close();
-
-        // Insert notification for student
         $msg = "Your reservation for " . $r_row['Purpose'] . " at Lab " . $r_row['Lab'] . " on " . $r_row['SessionDate'] . " has been approved.";
         $n = $conn->prepare("INSERT INTO notifications (StudentID, Message) VALUES (?,?)");
         $n->bind_param("ss", $r_row['StudentID'], $msg);
@@ -176,12 +177,10 @@ if (isset($_POST['reject_reservation'])) {
     $r_stmt->execute();
     $r_row = $r_stmt->get_result()->fetch_assoc();
     $r_stmt->close();
-
     if ($r_row) {
         $s = $conn->prepare("UPDATE sit_in_sessions SET Status='Cancelled' WHERE SessionID=? AND Type='Reservation'");
         $s->bind_param("i", $rid);
         $s->execute(); $s->close();
-
         $msg = "Your reservation for " . $r_row['Purpose'] . " at Lab " . $r_row['Lab'] . " on " . $r_row['SessionDate'] . " has been rejected.";
         $n = $conn->prepare("INSERT INTO notifications (StudentID, Message) VALUES (?,?)");
         $n->bind_param("ss", $r_row['StudentID'], $msg);
@@ -196,21 +195,8 @@ if (isset($_POST['reset_all_sessions'])) {
     header("Location: admin_dashboard.php?tab=sitin"); exit();
 }
 
-// ── Auto-activate approved reservations whose date+time has arrived ──────────
-// This converts Approved → Active only on the actual reservation day once the
-// scheduled TimeIn has passed, so future-date reservations stay 'Approved'.
-$conn->query(
-    "UPDATE sit_in_sessions
-     SET Status='Active'
-     WHERE Type='Reservation'
-       AND Status='Approved'
-       AND SessionDate = CURDATE()
-       AND TimeIn <= CURTIME()"
-);
-
 // ── Stats ────────────────────────────────────────────────────────────
 $total_students  = $conn->query("SELECT COUNT(*) as c FROM students_info WHERE is_admin=0")->fetch_assoc()['c'];
-// Only count sessions that are genuinely active today (not future-date approved reservations)
 $currently_sitin = $conn->query("SELECT COUNT(*) as c FROM sit_in_sessions WHERE Status='Active' AND SessionDate=CURDATE()")->fetch_assoc()['c'];
 $total_sitin     = $conn->query("SELECT COUNT(*) as c FROM sit_in_sessions")->fetch_assoc()['c'];
 $pending_res     = $conn->query("SELECT COUNT(*) as c FROM sit_in_sessions WHERE Type='Reservation' AND Status='Pending'")->fetch_assoc()['c'];
@@ -222,1604 +208,283 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CCS | Admin Dashboard</title>
+    <title>Admin Dashboard | CCS</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
     <style>
-        :root { --purple:#5c2b7a; --gold:#c09412; }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 
-        body { background:#f4f6fb; margin:0; }
-
-        /* ── Sidebar ── */
-        .sidebar {
-            width: 230px; min-height: 100vh;
-            background: var(--purple);
-            position: fixed; top:0; left:0;
-            display: flex; flex-direction: column;
-            z-index: 100;
-        }
-        .sidebar-logo {
-            padding: 20px 16px 12px;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-        }
-        .sidebar-logo img { height: 38px; background:var(--purple); }
-        .sidebar-logo span {
-            display: block; color: white;
-            font-size: 0.78rem; font-weight: 600;
-            margin-top: 8px; line-height: 1.3;
+        :root {
+            --primary-purple: #5c2b7a;
+            --purple-light: #7b3da3;
+            --purple-soft: #f3eaf9;
+            --gold: #c09412;
+            --gold-light: #d4a72c;
+            --bg-body: #f8f9fa;
+            --bg-card: rgba(255, 255, 255, 0.7);
+            --border-card: rgba(255, 255, 255, 0.4);
+            --text-main: #2d3436;
+            --text-dim: #636e72;
+            --card-radius: 24px;
+            --shadow: 0 8px 32px 0 rgba(92, 43, 122, 0.08);
         }
 
-        .sidebar-nav { padding: 12px 0; flex: 1; }
-        .nav-item-label {
-            font-size: 0.65rem; text-transform: uppercase;
-            letter-spacing: 0.1em; color: rgba(255,255,255,0.4);
-            padding: 10px 16px 4px;
-        }
-        .sidebar-link {
-            display: flex; align-items: center; gap: 10px;
-            padding: 9px 16px; color: rgba(255,255,255,0.75);
-            text-decoration: none; font-size: 0.88rem;
-            border-left: 3px solid transparent;
-            transition: all 0.2s;
-        }
-        .sidebar-link:hover { background: rgba(255,255,255,0.08); color: white; }
-        .sidebar-link.active {
-            background: rgba(255,255,255,0.13);
-            border-left-color: var(--gold);
-            color: white; font-weight: 600;
-        }
-        .sidebar-link i { width: 18px; text-align: center; font-size: 0.9rem; }
-
-        .sidebar-footer {
-            padding: 12px 16px;
-            border-top: 1px solid rgba(255,255,255,0.1);
-        }
-        .btn-logout-side {
-            display: flex; align-items: center; gap: 8px;
-            width: 100%; padding: 8px 12px;
-            background: rgba(255,255,255,0.1);
-            border: none; border-radius: 8px;
-            color: rgba(255,255,255,0.8); font-size: 0.85rem;
-            cursor: pointer; transition: background 0.2s;
-        }
-        .btn-logout-side:hover { background: rgba(255,255,255,0.2); color: white; }
-
-        /* ── Main content ── */
-        .main-content { margin-left: 230px; padding: 24px; }
-
-        /* ── Topbar ── */
-        .topbar {
-            display: flex; align-items: center;
-            justify-content: space-between;
-            margin-bottom: 24px;
-        }
-        .topbar h4 { color: var(--purple); font-weight: 800; margin: 0; }
-        .admin-badge {
-            background: var(--purple); color: white;
-            border-radius: 20px; padding: 4px 14px;
-            font-size: 0.8rem; font-weight: 600;
-        }
-
-        /* ── Stat cards ── */
-        .stat-card {
-            background: white; border-radius: 14px;
-            padding: 1.2rem 1.4rem;
-            box-shadow: 0 4px 16px rgba(92,43,122,0.08);
-            display: flex; align-items: center; gap: 16px;
-        }
-        .stat-icon {
-            width: 52px; height: 52px; border-radius: 12px;
-            display: flex; align-items: center; justify-content: center;
-            font-size: 1.3rem;
-        }
-        .stat-icon.purple { background: #f3eaf9; color: var(--purple); }
-        .stat-icon.gold   { background: #fdf6e3; color: var(--gold); }
-        .stat-icon.green  { background: #e9f7ef; color: #27ae60; }
-        .stat-num  { font-size: 1.7rem; font-weight: 800; color: #333; line-height: 1; }
-        .stat-label{ font-size: 0.78rem; color: #999; margin-top: 3px; }
-
-        /* ── Cards ── */
-        .dash-card {
-            background: white; border-radius: 14px; border: none;
-            box-shadow: 0 4px 16px rgba(92,43,122,0.07);
-        }
-        .card-header-purple {
-            background: var(--purple); color: white; font-weight: 600;
-            border-radius: 14px 14px 0 0 !important; padding: 10px 16px;
-        }
-        .card-header-gold {
-            background: var(--gold); color: #1a1a1a; font-weight: 600;
-            border-radius: 14px 14px 0 0 !important; padding: 10px 16px;
-        }
-
-        /* ── Tables ── */
-        .table thead th {
-            background: var(--purple); color: white;
-            font-size: 0.82rem; border: none;
-        }
-        .table tbody tr:hover { background: #f3eaf9; }
-        .table td, .table th { vertical-align: middle; font-size: 0.88rem; }
-
-        .badge-active    { background:#198754; color:white; }
-        .badge-completed { background:#6c757d; color:white; }
-
-        /* ── Buttons ── */
-        .btn-purple { background:var(--purple); color:white; border:none; border-radius:7px; }
-        .btn-purple:hover { background:#4a2263; color:white; }
-        .btn-gold   { background:var(--gold); color:#1a1a1a; border:none; border-radius:7px; }
-        .btn-gold:hover { background:#a87e0f; color:white; }
-
-        /* ── Announcement items ── */
-        .ann-item {
-            padding: 12px 0; border-bottom: 1px solid #f0f0f0;
-        }
-        .ann-item:last-child { border-bottom: none; }
-        .ann-item h6 { color:var(--purple); font-weight:700; margin-bottom:3px; font-size:0.9rem; }
-
-        /* ── Modal ── */
-        .modal-header { background:var(--purple); color:white; border-radius:12px 12px 0 0; }
-        .modal-header .btn-close { filter:invert(1); }
-        .modal-content { border-radius:12px; border:none; box-shadow:0 20px 50px rgba(0,0,0,0.15); }
-        .form-control:focus, .form-select:focus {
-            border-color:var(--purple);
-            box-shadow:0 0 0 3px rgba(92,43,122,0.12);
-        }
-
-        /* ── Search box ── */
-        .search-box {
-            border-radius: 8px; border: 1px solid #ddd;
-            padding: 0.4rem 0.75rem; font-size: 0.88rem;
-        }
-        .search-box:focus { border-color:var(--purple); outline:none; box-shadow:0 0 0 3px rgba(92,43,122,0.1); }
-
-        /* ── Leaderboard ── */
-        .leaderboard-container {
-            background: white;
-            border-radius: 12px;
-            overflow: hidden;
-        }
-        
-        .leaderboard-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.9rem;
-        }
-        
-        .leaderboard-table thead {
-            background-color: var(--purple);
-            color: white;
-            font-weight: 600;
-        }
-        
-        .leaderboard-table thead th {
-            padding: 12px 16px;
-            text-align: left;
-            border: none;
-        }
-        
-        .rank-col { width: 80px; }
-        .name-col { flex: 1; min-width: 180px; }
-        .course-col { width: 140px; }
-        .score-col { width: 100px; text-align: right; }
-        .detail-col { width: 90px; text-align: center; }
-        
-        .leaderboard-table tbody tr {
-            border-bottom: 1px solid #f0f0f0;
-            transition: background-color 0.2s;
-        }
-        
-        .leaderboard-table tbody tr:hover {
-            background-color: #f8f4fc;
-        }
-        
-        .leaderboard-table tbody tr.top-rank {
-            background-color: #faf6ff;
-        }
-        
-        .leaderboard-table tbody tr.rank-1 {
-            border-left: 4px solid #ffc107;
-        }
-        
-        .leaderboard-table tbody tr.rank-2 {
-            border-left: 4px solid #c0c0c0;
-        }
-        
-        .leaderboard-table tbody tr.rank-3 {
-            border-left: 4px solid #cd7f32;
-        }
-        
-        .leaderboard-table td {
-            padding: 12px 16px;
-        }
-        
-        .rank-cell {
-            text-align: center;
-            font-weight: 600;
-        }
-        
-        .rank-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 4px 10px;
-            border-radius: 6px;
-            font-size: 0.85rem;
-            font-weight: 700;
-            color: white;
-        }
-        
-        .rank-badge.gold {
-            background-color: #ffc107;
-            color: #1a1a1a;
-        }
-        
-        .rank-badge.silver {
-            background-color: #c0c0c0;
-            color: #1a1a1a;
-        }
-        
-        .rank-badge.bronze {
-            background-color: #cd7f32;
-            color: white;
-        }
-        
-        .rank-number {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 28px;
-            height: 28px;
-            border-radius: 50%;
-            background-color: var(--purple);
-            color: white;
-            font-weight: 700;
-            font-size: 0.85rem;
-        }
-        
-        .student-info {
+        body {
+            background-color: var(--bg-body);
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(92, 43, 122, 0.05) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(192, 148, 18, 0.03) 0px, transparent 50%);
+            font-family: 'Inter', sans-serif;
+            color: var(--text-main);
+            margin: 0;
+            min-height: 100vh;
             display: flex;
-            align-items: center;
-            gap: 10px;
         }
-        
-        .student-avatar {
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid #e0e0e0;
+
+        /* ── Dock Sidebar ── */
+        .dock-sidebar {
+            width: 80px; background: var(--primary-purple); height: 100vh; position: fixed; left: 0; top: 0;
+            display: flex; flex-direction: column; align-items: center; padding: 30px 0; z-index: 1000;
+            box-shadow: 10px 0 30px rgba(0,0,0,0.05); transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
-        
-        .student-avatar-initials {
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            background-color: var(--purple);
-            color: white;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 700;
-            font-size: 0.9rem;
+        .dock-sidebar:hover { width: 240px; }
+        .dock-logo { margin-bottom: 50px; transition: 0.3s; }
+        .dock-logo img { width: 45px; filter: drop-shadow(0 4px 8px rgba(0,0,0,0.2)); }
+        .dock-nav { flex: 1; width: 100%; display: flex; flex-direction: column; gap: 12px; padding: 0 12px; }
+        .dock-link {
+            width: 100%; height: 50px; display: flex; align-items: center; text-decoration: none;
+            color: rgba(255,255,255,0.7); border-radius: 14px; transition: 0.2s; overflow: hidden; white-space: nowrap;
         }
-        
-        .student-name {
-            font-weight: 600;
-            color: #333;
+        .dock-link i { min-width: 56px; text-align: center; font-size: 1.25rem; }
+        .dock-link span { font-weight: 600; font-size: 0.9rem; opacity: 0; transform: translateX(-10px); transition: 0.3s; }
+        .dock-sidebar:hover .dock-link span { opacity: 1; transform: translateX(0); }
+        .dock-link:hover { background: rgba(255,255,255,0.1); color: white; }
+        .dock-link.active { background: white; color: var(--primary-purple); box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .dock-link.active i { color: var(--gold); }
+
+        /* ── Main Layout ── */
+        .main-wrapper { margin-left: 80px; flex: 1; padding: 40px; transition: 0.3s; }
+        .header-section { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 40px; }
+        .header-section h1 { font-weight: 800; font-size: 2.2rem; letter-spacing: -1px; margin: 0; color: var(--primary-purple); }
+
+        /* ── Bento Grid ── */
+        .bento-grid { display: grid; grid-template-columns: repeat(4, 1fr); grid-auto-rows: minmax(160px, auto); gap: 24px; }
+        .bento-card {
+            background: var(--bg-card); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--border-card); border-radius: var(--card-radius); padding: 24px;
+            transition: 0.3s ease; display: flex; flex-direction: column; position: relative; overflow: hidden; box-shadow: var(--shadow);
         }
-        
-        .course-cell {
-            font-size: 0.85rem;
-            color: #666;
-        }
-        
-        .score-cell {
-            text-align: right;
-            font-weight: 700;
-        }
-        
-        .score-badge {
-            display: inline-block;
-            background-color: var(--purple);
-            color: white;
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-weight: 600;
-            font-size: 0.9rem;
-        }
-        
-        .detail-cell {
-            text-align: center;
-            color: #666;
-            font-size: 0.85rem;
-        }
+        .bento-card:hover { transform: translateY(-5px); box-shadow: 0 15px 40px rgba(92, 43, 122, 0.12); }
+
+        .tile-large { grid-column: span 2; grid-row: span 2; }
+        .tile-wide { grid-column: span 4; }
+        .tile-medium { grid-column: span 2; }
+        .tile-small { grid-column: span 1; }
+
+        .card-title { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 1.2px; color: var(--text-dim); font-weight: 800; margin-bottom: 18px; display: flex; align-items: center; gap: 8px; }
+        .card-title i { color: var(--gold); }
+
+        .vital-sign { display: flex; flex-direction: column; justify-content: center; height: 100%; }
+        .vital-value { font-size: 2.5rem; font-weight: 900; line-height: 1; margin-bottom: 5px; color: var(--primary-purple); }
+        .vital-label { color: var(--text-dim); font-weight: 700; font-size: 0.72rem; text-transform: uppercase; }
+
+        .glass-table-container { flex: 1; overflow: auto; }
+        .glass-table { width: 100%; border-collapse: separate; border-spacing: 0 8px; }
+        .glass-table th { text-align: left; font-size: 0.65rem; text-transform: uppercase; color: var(--text-dim); padding: 0 15px; font-weight: 800; }
+        .glass-table tr { background: rgba(255, 255, 255, 0.4); transition: 0.2s; }
+        .glass-table tr:hover { background: var(--purple-soft); }
+        .glass-table td { padding: 12px 15px; font-weight: 600; font-size: 0.85rem; border-top: 1px solid rgba(0,0,0,0.02); border-bottom: 1px solid rgba(0,0,0,0.02); }
+        .glass-table td:first-child { border-left: 1px solid rgba(0,0,0,0.02); border-radius: 12px 0 0 12px; }
+        .glass-table td:last-child { border-right: 1px solid rgba(0,0,0,0.02); border-radius: 0 12px 12px 0; }
+
+        .status-badge { padding: 5px 12px; border-radius: 100px; font-size: 0.6rem; font-weight: 800; text-transform: uppercase; }
+        .status-active { background: #e3fcef; color: #00a854; }
+        .status-completed { background: #f4f5f7; color: #5e6c84; }
+
+        .btn-action { background: var(--primary-purple); border: none; color: white; padding: 10px 18px; border-radius: 12px; font-weight: 700; font-size: 0.78rem; transition: 0.3s; }
+        .btn-action:hover { transform: translateY(-2px); background: var(--purple-light); }
+        .search-bar { background: #f1f3f5; border: 2px solid transparent; border-radius: 14px; padding: 10px 15px 10px 40px; color: var(--text-main); font-size: 0.88rem; width: 100%; font-weight: 600; }
+        .search-bar:focus { outline: none; border-color: var(--purple-soft); background: white; }
+
+        .chart-container { position: relative; height: 200px; width: 100%; }
+        .lab-item { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 16px; background: rgba(255, 255, 255, 0.3); margin-bottom: 10px; border: 1px solid rgba(0,0,0,0.02); }
+        .lab-avatar { width: 38px; height: 38px; border-radius: 10px; background: var(--primary-purple); color: white; display: flex; align-items: center; justify-content: center; font-weight: 800; }
+
+        ::-webkit-scrollbar { width: 5px; }
+        ::-webkit-scrollbar-thumb { background: #e0e0e0; border-radius: 10px; }
     </style>
 </head>
 <body>
 
-<!-- ════ SIDEBAR ════ -->
-<div class="sidebar">
-    <div class="sidebar-logo">
-        <img src="UCLogo-removebg-preview.png" alt="UC">
-        <span>CCS Admin<br>Sit-in Monitoring</span>
-    </div>
-
-    <nav class="sidebar-nav">
-        <div class="nav-item-label">Main</div>
-        <a href="admin_dashboard.php" class="sidebar-link <?= $active_tab==='dashboard' ? 'active':'' ?>">
-            <i class="fa fa-gauge"></i> Dashboard
-        </a>
-        <a href="admin_dashboard.php?tab=students" class="sidebar-link <?= $active_tab==='students' ? 'active':'' ?>">
-            <i class="fa fa-users"></i> Students
-        </a>
-        <a href="admin_dashboard.php?tab=sitinform" class="sidebar-link <?= $active_tab==='sitinform' ? 'active':'' ?>">
-            <i class="fa fa-right-to-bracket"></i> Sit-in
-        </a>
-        <a href="admin_dashboard.php?tab=sitin" class="sidebar-link <?= $active_tab==='sitin' ? 'active':'' ?>">
-            <i class="fa fa-desktop"></i> Current Sit-in
-        </a>
-        <a href="admin_dashboard.php?tab=records" class="sidebar-link <?= $active_tab==='records' ? 'active':'' ?>">
-            <i class="fa fa-table-list"></i> Sit-in Records
-        </a>
-        <a href="admin_dashboard.php?tab=leaderboard" class="sidebar-link <?= $active_tab==='leaderboard' ? 'active':'' ?>">
-            <i class="fa fa-ranking-star"></i> Leaderboard
-        </a>
-
-        <div class="nav-item-label">Manage</div>
-        <a href="admin_dashboard.php?tab=announcements" class="sidebar-link <?= $active_tab==='announcements' ? 'active':'' ?>">
-            <i class="fa fa-bullhorn"></i> Announcements
-        </a>
-        <a href="admin_dashboard.php?tab=reservations" class="sidebar-link <?= $active_tab==='reservations' ? 'active':'' ?>">
-            <i class="fa fa-calendar-check"></i> Reservations
-            <?php if ($pending_res > 0): ?>
-                <span style="margin-left:auto;background:var(--gold);color:#1a1a1a;border-radius:20px;padding:1px 8px;font-size:0.7rem;font-weight:700;">
-                    <?= $pending_res ?>
-                </span>
-            <?php endif; ?>
-        </a>
-        <a href="admin_dashboard.php?tab=feedback" class="sidebar-link <?= $active_tab==='feedback' ? 'active':'' ?>">
-            <i class="fa fa-star"></i> Feedback
-        </a>
-        <a href="admin_dashboard.php?tab=labs" class="sidebar-link <?= $active_tab==='labs' ? 'active':'' ?>">
-            <i class="fa fa-desktop"></i> Labs &amp; PCs
-        </a>
+<aside class="dock-sidebar">
+    <div class="dock-logo"><img src="UCLogo-removebg-preview.png" alt="UC"></div>
+    <nav class="dock-nav">
+        <a href="admin_dashboard.php?tab=dashboard" class="dock-link <?= $active_tab==='dashboard'?'active':'' ?>"><i class="fa-solid fa-house"></i><span>Dashboard</span></a>
+        <a href="admin_dashboard.php?tab=students" class="dock-link <?= $active_tab==='students'?'active':'' ?>"><i class="fa-solid fa-users"></i><span>Students</span></a>
+        <a href="admin_dashboard.php?tab=sitin" class="dock-link <?= $active_tab==='sitin'?'active':'' ?>"><i class="fa-solid fa-microchip"></i><span>Live Monitor</span></a>
+        <a href="admin_dashboard.php?tab=sitinform" class="dock-link <?= $active_tab==='sitinform'?'active':'' ?>"><i class="fa-solid fa-plus-circle"></i><span>New Entry</span></a>
+        <a href="admin_dashboard.php?tab=reservations" class="dock-link <?= $active_tab==='reservations'?'active':'' ?>"><i class="fa-solid fa-calendar-check"></i><span>Reservations</span></a>
+        <a href="admin_dashboard.php?tab=announcements" class="dock-link <?= $active_tab==='announcements'?'active':'' ?>"><i class="fa-solid fa-bullhorn"></i><span>Announcements</span></a>
+        <a href="admin_dashboard.php?tab=records" class="dock-link <?= $active_tab==='records'?'active':'' ?>"><i class="fa-solid fa-history"></i><span>History</span></a>
+        <a href="admin_dashboard.php?tab=labs" class="dock-link <?= $active_tab==='labs'?'active':'' ?>"><i class="fa-solid fa-flask"></i><span>Laboratories</span></a>
     </nav>
+    <form method="POST" action="logout.php" class="w-100 px-2"><?php csrf_input(); ?><button class="dock-link border-0 bg-transparent w-100 text-danger"><i class="fa-solid fa-power-off"></i><span>Logout</span></button></form>
+</aside>
 
-    <div class="sidebar-footer">
-        <form method="POST" action="logout.php">
-            <button class="btn-logout-side">
-                <i class="fa fa-right-from-bracket"></i> Log Out
-            </button>
-        </form>
-    </div>
-</div>
-
-<!-- ════ MAIN CONTENT ════ -->
-<div class="main-content">
-
-    <!-- Topbar -->
-    <div class="topbar">
-        <h4>
-            <?php
-            $titles = [
-                'dashboard'     => '<i class="fa fa-gauge me-2"></i>Dashboard',
-                'students'      => '<i class="fa fa-users me-2"></i>Students Information',
-                'sitinform'     => '<i class="fa fa-right-to-bracket me-2"></i>Sit-in Student',
-                'sitin'         => '<i class="fa fa-desktop me-2"></i>Current Sit-in',
-                'records'       => '<i class="fa fa-table-list me-2"></i>Sit-in Records',
-                'announcements' => '<i class="fa fa-bullhorn me-2"></i>Announcements',
-                'reservations'  => '<i class="fa fa-calendar-check me-2"></i>Reservations',
-                'feedback'      => '<i class="fa fa-star me-2"></i>Student Feedback',
-                'labs'          => '<i class="fa fa-desktop me-2"></i>Labs &amp; PCs Configuration',
-            ];
-            echo $titles[$active_tab] ?? $titles['dashboard'];
-            ?>
-        </h4>
-        <span class="admin-badge"><i class="fa fa-shield-halved me-1"></i>CCS Admin</span>
-    </div>
-
-
-    <!-- ══════════════ DASHBOARD TAB ══════════════ -->
-    <?php if ($active_tab === 'dashboard'): ?>
-
-    <!-- Stat cards -->
-    <div class="row g-3 mb-4">
-        <div class="col-md-4">
-            <div class="stat-card">
-                <div class="stat-icon purple"><i class="fa fa-users"></i></div>
-                <div>
-                    <div class="stat-num"><?= $total_students ?></div>
-                    <div class="stat-label">Students Registered</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-4">
-            <div class="stat-card">
-                <div class="stat-icon green"><i class="fa fa-desktop"></i></div>
-                <div>
-                    <div class="stat-num"><?= $currently_sitin ?></div>
-                    <div class="stat-label">Currently Sit-in</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-4">
-            <div class="stat-card">
-                <div class="stat-icon gold"><i class="fa fa-clock-rotate-left"></i></div>
-                <div>
-                    <div class="stat-num"><?= $total_sitin ?></div>
-                    <div class="stat-label">Total Sit-in Sessions</div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Charts + Announcements -->
-    <div class="row g-4">
-        <!-- Pie chart: sessions by purpose -->
-        <div class="col-md-5">
-            <div class="dash-card h-100">
-                <div class="card-header-purple">
-                    <i class="fa fa-chart-pie me-2"></i>Analytics
-                </div>
-                <div class="card-body d-flex align-items-center justify-content-center" style="min-height:260px;">
-                    <canvas id="purposeChart" style="max-height:240px;"></canvas>
-                </div>
-            </div>
-        </div>
-
-        <!-- Recent announcements -->
-        <div class="col-md-7">
-            <div class="dash-card h-100">
-                <div class="card-header-gold d-flex justify-content-between align-items-center">
-                    <span><i class="fa fa-bullhorn me-2"></i>Recent Announcements</span>
-                    <a href="admin_dashboard.php?tab=announcements" class="btn btn-sm btn-purple px-3" style="font-size:0.78rem;">Manage</a>
-                </div>
-                <div class="card-body">
-                    <?php
-                    $ann = $conn->query("SELECT * FROM announcements ORDER BY DatePosted DESC LIMIT 4");
-                    if ($ann && $ann->num_rows > 0):
-                        while ($a = $ann->fetch_assoc()):
-                    ?>
-                        <div class="ann-item">
-                            <h6><?= htmlspecialchars($a['Title']) ?></h6>
-                            <p class="mb-1 text-muted" style="font-size:0.82rem;"><?= htmlspecialchars($a['Message']) ?></p>
-                            <small class="text-muted"><i class="fa fa-calendar me-1"></i><?= $a['DatePosted'] ?></small>
-                        </div>
-                    <?php endwhile; else: ?>
-                        <p class="text-muted mb-0">No announcements yet.</p>
-                    <?php endif; ?>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <?php
-    // Get purpose data for chart
-    $pc = $conn->query("SELECT Purpose, COUNT(*) as cnt FROM sit_in_sessions GROUP BY Purpose");
-    $p_labels = []; $p_data = [];
-    if ($pc) while ($r = $pc->fetch_assoc()) { $p_labels[] = $r['Purpose']; $p_data[] = $r['cnt']; }
-    ?>
-    <script>
-    const ctx = document.getElementById('purposeChart');
-    new Chart(ctx, {
-        type: 'pie',
-        data: {
-            labels: <?= json_encode($p_labels) ?>,
-            datasets: [{ data: <?= json_encode($p_data) ?>,
-                backgroundColor: ['#5c2b7a','#c09412','#27ae60','#2980b9','#e74c3c','#8e44ad','#f39c12'],
-            }]
-        },
-        options: { plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } }, responsive: true }
-    });
-    </script>
-
-
-    <!-- ══════════════ STUDENTS TAB ══════════════ -->
-    <?php elseif ($active_tab === 'students'): ?>
-
-    <div class="dash-card">
-        <div class="card-header-purple d-flex justify-content-between align-items-center">
-            <span><i class="fa fa-users me-2"></i>All Students</span>
-            <div class="d-flex gap-2 align-items-center">
-                <input type="text" id="studentSearch" class="search-box" placeholder="Search..." style="width:180px;">
-                <form method="POST" onsubmit="return confirm('Reset ALL active sessions?')">
-                    <button name="reset_all_sessions" class="btn btn-sm btn-gold px-3">
-                        <i class="fa fa-rotate me-1"></i>Reset All Sessions
-                    </button>
-                </form>
-            </div>
-        </div>
-        <div class="card-body p-0">
-            <div class="table-responsive">
-                <table class="table table-hover mb-0" id="studentTable">
-                    <thead>
-                        <tr>
-                            <th>ID Number</th>
-                            <th>Name</th>
-                            <th>Year Level</th>
-                            <th>Course</th>
-                            <th>Email</th>
-                            <th>Used</th>
-                            <th>Remaining</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                    <?php
-                    $stu = $conn->query("
-                        SELECT si.*,
-                            30 as MaxCredits,
-                            COUNT(s.SessionID) as UsedSessions
-                        FROM students_info si
-                        LEFT JOIN sit_in_sessions s
-                            ON s.StudentID = si.IdNumber
-                            AND (s.Type = 'Sit-in' OR s.Type IS NULL)
-                        WHERE si.is_admin = 0
-                        GROUP BY si.IdNumber
-                        ORDER BY si.LastName ASC
-                    ");
-                    if ($stu && $stu->num_rows > 0):
-                        while ($s = $stu->fetch_assoc()):
-                            $max       = (int)$s['MaxCredits'];
-                            $used      = (int)$s['UsedSessions'];
-                            $remaining = max(0, $max - $used);
-                            $pct       = $max > 0 ? round(($remaining / $max) * 100) : 0;
-                            $bar_color = $remaining > 15 ? '#198754' : ($remaining > 5 ? '#c09412' : '#dc3545');
-                    ?>
-                        <tr>
-                            <td><?= htmlspecialchars($s['IdNumber']) ?></td>
-                            <td><?= htmlspecialchars($s['FirstName'].' '.$s['LastName']) ?></td>
-                            <td>Year <?= $s['CourseLevel'] ?></td>
-                            <td><?= htmlspecialchars($s['Course']) ?></td>
-                            <td style="font-size:0.8rem"><?= htmlspecialchars($s['Email']) ?></td>
-                            <td>
-                                <span style="font-weight:600;color:#555;"><?= $used ?> / <?= $max ?></span>
-                            </td>
-                            <td>
-                                <div style="display:flex;align-items:center;gap:7px;min-width:90px;">
-                                    <div style="flex:1;height:7px;border-radius:4px;background:#e0e0e0;overflow:hidden;">
-                                        <div style="width:<?= $pct ?>%;height:100%;background:<?= $bar_color ?>;border-radius:4px;"></div>
-                                    </div>
-                                    <span style="font-weight:700;color:<?= $bar_color ?>;font-size:0.85rem;min-width:20px;"><?= $remaining ?></span>
-                                </div>
-                            </td>
-                            <td>
-                                <button class="btn btn-sm btn-purple me-1"
-                                    onclick="openEdit(
-                                        '<?= htmlspecialchars($s['IdNumber']) ?>',
-                                        '<?= htmlspecialchars($s['FirstName']) ?>',
-                                        '<?= htmlspecialchars($s['LastName']) ?>',
-                                        '<?= htmlspecialchars($s['Course']) ?>',
-                                        '<?= $s['CourseLevel'] ?>'
-                                    )">
-                                    <i class="fa fa-pen"></i> Edit
-                                </button>
-                                <form method="POST" style="display:inline;" onsubmit="return confirm('Delete this student?')">
-                                    <input type="hidden" name="del_id" value="<?= $s['IdNumber'] ?>">
-                                    <button name="delete_student" class="btn btn-sm btn-danger">
-                                        <i class="fa fa-trash"></i> Delete
-                                    </button>
-                                </form>
-                            </td>
-                        </tr>
-                    <?php endwhile; else: ?>
-                        <tr><td colspan="8" class="text-center text-muted py-3">No students found.</td></tr>
-                    <?php endif; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-
-    <!-- Edit Student Modal -->
-    <div class="modal fade" id="editStudentModal" tabindex="-1">
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <div class="modal-header py-2">
-                    <h6 class="modal-title"><i class="fa fa-pen me-2"></i>Edit Student</h6>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <form method="POST">
-                        <input type="hidden" name="edit_id" id="edit_id">
-                        <div class="mb-3">
-                            <label class="form-label" style="font-size:0.8rem;color:#777;">First Name</label>
-                            <input type="text" name="edit_first" id="edit_first" class="form-control" required>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label" style="font-size:0.8rem;color:#777;">Last Name</label>
-                            <input type="text" name="edit_last" id="edit_last" class="form-control" required>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label" style="font-size:0.8rem;color:#777;">Course</label>
-                            <input type="text" name="edit_course" id="edit_course" class="form-control" required>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label" style="font-size:0.8rem;color:#777;">Year Level</label>
-                            <select name="edit_level" id="edit_level" class="form-select">
-                                <option value="1">1st Year</option>
-                                <option value="2">2nd Year</option>
-                                <option value="3">3rd Year</option>
-                                <option value="4">4th Year</option>
-                            </select>
-                        </div>
-                        <div class="d-flex justify-content-end gap-2">
-                            <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
-                            <button type="submit" name="edit_student" class="btn btn-sm btn-gold px-4">Save</button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-        </div>
-    </div>
-
-
-    <!-- ══════════════ CURRENT SIT-IN TAB ══════════════ -->
-    <?php elseif ($active_tab === 'sitin'): ?>
-
-    <div class="dash-card" style="overflow:visible;">
-        <div class="card-header-purple d-flex justify-content-between align-items-center">
-            <span><i class="fa fa-desktop me-2"></i>Currently Active Sessions</span>
-            <form method="POST" onsubmit="return confirm('Log out ALL active sessions?')">
-                <button name="reset_all_sessions" class="btn btn-sm btn-gold px-3">
-                    <i class="fa fa-rotate me-1"></i>Reset All Sessions
-                </button>
-            </form>
-        </div>
-        <div class="card-body p-0" style="overflow:visible;">
-            <div class="table-responsive" style="overflow:visible;">
-                <table class="table table-hover mb-0">
-                    <thead>
-                        <tr>
-                            <th>Sit ID</th>
-                            <th>ID Number</th>
-                            <th>Name</th>
-                            <th>Purpose</th>
-                            <th>Lab</th>
-                            <th>PC</th>
-                            <th>Time In</th>
-                            <th>Status</th>
-                            <th>Action</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                    <?php
-                    $sit = $conn->query("
-                        SELECT s.*, st.FirstName, st.LastName
-                        FROM sit_in_sessions s
-                        JOIN students_info st ON s.StudentID = st.IdNumber
-                        WHERE s.Status = 'Active'
-                        ORDER BY s.SessionDate DESC
-                    ");
-                    if ($sit && $sit->num_rows > 0):
-                        while ($r = $sit->fetch_assoc()):
-                    ?>
-                        <tr>
-                            <td><?= $r['SessionID'] ?></td>
-                            <td><?= htmlspecialchars($r['StudentID']) ?></td>
-                            <td><?= htmlspecialchars($r['FirstName'].' '.$r['LastName']) ?></td>
-                            <td><?= htmlspecialchars($r['Purpose'] ?? '—') ?></td>
-                            <td><?= htmlspecialchars($r['Lab'] ?? '—') ?></td>
-                            <td><?= $r['PCNumber'] ? 'PC '.$r['PCNumber'] : '<span class="text-muted">—</span>' ?></td>
-                            <td><?= htmlspecialchars($r['TimeIn']) ?></td>
-                            <td><span class="badge badge-active">Active</span></td>
-                            <td>
-                                <div class="dropdown">
-                                    <button class="btn btn-sm btn-purple dropdown-toggle" type="button" data-bs-toggle="dropdown">
-                                        <i class="fa fa-ellipsis me-1"></i>Actions
-                                    </button>
-                                    <ul class="dropdown-menu dropdown-menu-end shadow" style="font-size:0.85rem;min-width:180px;">
-                                        <li>
-                                            <form method="POST" onsubmit="return confirm('Terminate this session?')">
-                                                <input type="hidden" name="session_id" value="<?= $r['SessionID'] ?>">
-                                                <button name="logout_session" type="submit" class="dropdown-item text-danger">
-                                                    <i class="fa fa-circle-stop me-2"></i>Terminate Session
-                                                </button>
-                                            </form>
-                                        </li>
-                                        <li><hr class="dropdown-divider"></li>
-                                        <li>
-                                            <button class="dropdown-item text-muted" disabled title="Coming soon">
-                                                <i class="fa fa-arrow-right-arrow-left me-2"></i>Transfer to Another PC
-                                                <span style="font-size:0.7rem;background:#eee;color:#999;border-radius:4px;padding:1px 5px;margin-left:4px;">Soon</span>
-                                            </button>
-                                        </li>
-                                    </ul>
-                                </div>
-                            </td>
-                        </tr>
-                    <?php endwhile; else: ?>
-                        <tr><td colspan="9" class="text-center text-muted py-3">
-                            <i class="fa fa-desktop me-2"></i>No active sit-in sessions.
-                        </td></tr>
-                    <?php endif; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-
-
-    <!-- ══════════════ SIT-IN RECORDS TAB ══════════════ -->
-    <?php elseif ($active_tab === 'records'): ?>
-
-    <div class="dash-card">
-        <div class="card-header-purple d-flex justify-content-between align-items-center flex-wrap gap-2">
-            <span><i class="fa fa-table-list me-2"></i>All Sit-in Records</span>
-            <div class="d-flex align-items-center gap-2 flex-wrap">
-                <input type="text" id="recordSearch" class="search-box" placeholder="Search..." style="width:160px;">
-                <button onclick="exportCSV()" class="btn btn-sm" style="background:#27ae60;color:white;border:none;border-radius:7px;font-size:0.78rem;padding:4px 12px;">
-                    <i class="fa fa-file-csv me-1"></i>CSV
-                </button>
-                <button onclick="exportExcel()" class="btn btn-sm" style="background:#1d6f42;color:white;border:none;border-radius:7px;font-size:0.78rem;padding:4px 12px;">
-                    <i class="fa fa-file-excel me-1"></i>Excel
-                </button>
-                <button onclick="exportPDF()" class="btn btn-sm" style="background:#c0392b;color:white;border:none;border-radius:7px;font-size:0.78rem;padding:4px 12px;">
-                    <i class="fa fa-file-pdf me-1"></i>PDF
-                </button>
-                <button onclick="printTable()" class="btn btn-sm" style="background:#555;color:white;border:none;border-radius:7px;font-size:0.78rem;padding:4px 12px;">
-                    <i class="fa fa-print me-1"></i>Print
-                </button>
-            </div>
-        </div>
-        <div class="card-body p-0">
-            <div class="table-responsive">
-                <table class="table table-hover mb-0" id="recordTable">
-                    <thead>
-                        <tr>
-                            <th>Sit ID</th>
-                            <th>ID Number</th>
-                            <th>Name</th>
-                            <th>Purpose</th>
-                            <th>Lab</th>
-                            <th>PC</th>
-                            <th>Time In</th>
-                            <th>Time Out</th>
-                            <th>Date</th>
-                            <th>Status</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                    <?php
-                    $rec = $conn->query("
-                        SELECT s.*, st.FirstName, st.LastName
-                        FROM sit_in_sessions s
-                        JOIN students_info st ON s.StudentID = st.IdNumber
-                        ORDER BY s.SessionDate DESC, s.TimeIn DESC
-                    ");
-                    if ($rec && $rec->num_rows > 0):
-                        while ($r = $rec->fetch_assoc()):
-                            $rb = strtolower($r['Status']) === 'active' ? 'badge-active' : 'badge-completed';
-                    ?>
-                        <tr>
-                            <td><?= $r['SessionID'] ?></td>
-                            <td><?= htmlspecialchars($r['StudentID']) ?></td>
-                            <td><?= htmlspecialchars($r['FirstName'].' '.$r['LastName']) ?></td>
-                            <td><?= htmlspecialchars($r['Purpose'] ?? '—') ?></td>
-                            <td><?= htmlspecialchars($r['Lab'] ?? '—') ?></td>
-                            <td><?= $r['PCNumber'] ? 'PC '.$r['PCNumber'] : '<span class="text-muted">—</span>' ?></td>
-                            <td><?= htmlspecialchars($r['TimeIn']) ?></td>
-                            <td><?= $r['TimeOut'] ? htmlspecialchars($r['TimeOut']) : '<span class="text-muted">—</span>' ?></td>
-                            <td><?= htmlspecialchars($r['SessionDate']) ?></td>
-                            <td><span class="badge <?= $rb ?>"><?= htmlspecialchars($r['Status']) ?></span></td>
-                        </tr>
-                    <?php endwhile; else: ?>
-                        <tr><td colspan="10" class="text-center text-muted py-3">No records found.</td></tr>
-                    <?php endif; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-
-
-    <!-- ══════════════ LEADERBOARD TAB ══════════════ -->
-    <?php elseif ($active_tab === 'leaderboard'): ?>
-
-    <div class="dash-card">
-        <div class="card-header-purple d-flex justify-content-between align-items-center flex-wrap gap-2">
-            <span><i class="fa fa-ranking-star me-2"></i>Student Leaderboard</span>
-            <small style="font-weight:400; color:#ddd;">Score: 30% Hours • 50% Reservations • 20% Tasks</small>
-        </div>
-        <div class="card-body">
-            <?php
-            $leaderboard = getLeaderboardData($conn, 20);
-            displayLeaderboard($leaderboard, true);
-            ?>
-        </div>
-    </div>
-
-
-    <!-- ══════════════ ANNOUNCEMENTS TAB ══════════════ -->
-    <?php elseif ($active_tab === 'announcements'): ?>
-
-    <div class="row g-4">
-        <!-- Post new -->
-        <div class="col-md-5">
-            <div class="dash-card">
-                <div class="card-header-purple">
-                    <i class="fa fa-plus me-2"></i>Post New Announcement
-                </div>
-                <div class="card-body">
-                    <form method="POST">
-                        <div class="mb-3">
-                            <label class="form-label" style="font-size:0.8rem;color:#777;">Title</label>
-                            <input type="text" name="ann_title" class="form-control" placeholder="Announcement title" required>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label" style="font-size:0.8rem;color:#777;">Message</label>
-                            <textarea name="ann_message" class="form-control" rows="5" placeholder="Write your announcement here..." required></textarea>
-                        </div>
-                        <button type="submit" name="post_announcement" class="btn btn-gold w-100">
-                            <i class="fa fa-paper-plane me-2"></i>Post Announcement
-                        </button>
-                    </form>
-                </div>
-            </div>
-        </div>
-
-        <!-- Posted announcements -->
-        <div class="col-md-7">
-            <div class="dash-card">
-                <div class="card-header-gold">
-                    <i class="fa fa-list me-2"></i>Posted Announcements
-                </div>
-                <div class="card-body">
-                    <?php
-                    $ann = $conn->query("SELECT * FROM announcements ORDER BY DatePosted DESC");
-                    if ($ann && $ann->num_rows > 0):
-                        while ($a = $ann->fetch_assoc()):
-                    ?>
-                        <div class="ann-item d-flex justify-content-between align-items-start">
-                            <div>
-                                <h6><?= htmlspecialchars($a['Title']) ?></h6>
-                                <p class="mb-1 text-muted" style="font-size:0.82rem;"><?= htmlspecialchars($a['Message']) ?></p>
-                                <small class="text-muted"><i class="fa fa-calendar me-1"></i><?= $a['DatePosted'] ?></small>
-                            </div>
-                            <form method="POST" onsubmit="return confirm('Delete this announcement?')" class="ms-3">
-                                <input type="hidden" name="ann_id" value="<?= $a['AnnouncementID'] ?>">
-                                <button name="delete_announcement" class="btn btn-sm btn-danger">
-                                    <i class="fa fa-trash"></i>
-                                </button>
-                            </form>
-                        </div>
-                    <?php endwhile; else: ?>
-                        <p class="text-muted mb-0">No announcements posted yet.</p>
-                    <?php endif; ?>
-                </div>
-            </div>
-        </div>
-    </div>
-
-
-    <!-- ══════════════ RESERVATIONS TAB ══════════════ -->
-    <?php elseif ($active_tab === 'reservations'): ?>
-
-    <?php
-    $pending_count = $conn->query("SELECT COUNT(*) as c FROM sit_in_sessions WHERE Type='Reservation' AND Status='Pending'")->fetch_assoc()['c'];
-    ?>
-
-    <div class="dash-card" style="overflow:visible;">
-        <div class="card-header-purple d-flex justify-content-between align-items-center">
-            <span><i class="fa fa-calendar-check me-2"></i>Student Reservations</span>
-            <?php if ($pending_count > 0): ?>
-                <span style="background:var(--gold);color:#1a1a1a;border-radius:20px;padding:3px 12px;font-size:0.78rem;font-weight:700;">
-                    <?= $pending_count ?> Pending
-                </span>
-            <?php endif; ?>
-        </div>
-        <div class="card-body p-0" style="overflow:visible;">
-            <div class="table-responsive" style="overflow:visible;">
-                <table class="table table-hover mb-0">
-                    <thead>
-                        <tr>
-                            <th>ID</th>
-                            <th>Student ID</th>
-                            <th>Name</th>
-                            <th>Purpose</th>
-                            <th>Lab</th>
-                            <th>PC</th>
-                            <th>Time In</th>
-                            <th>Date</th>
-                            <th>Status</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                    <?php
-                    $rvq = $conn->query("
-                        SELECT s.*, st.FirstName, st.LastName
-                        FROM sit_in_sessions s
-                        JOIN students_info st ON s.StudentID = st.IdNumber
-                        WHERE s.Type = 'Reservation'
-                        ORDER BY FIELD(s.Status,'Pending','Approved','Cancelled'), s.SessionDate ASC, s.TimeIn ASC
-                    ");
-                    if ($rvq && $rvq->num_rows > 0):
-                        while ($r = $rvq->fetch_assoc()):
-                            $rbadge = match(strtolower($r['Status'])) {
-                                'pending'   => 'background:#c09412;color:#1a1a1a;',
-                                'approved'  => 'background:#0d6efd;color:white;',
-                                'active'    => 'background:#198754;color:white;',
-                                'cancelled' => 'background:#6c757d;color:white;',
-                                default     => 'background:#c09412;color:#1a1a1a;'
-                            };
-                    ?>
-                        <tr>
-                            <td><?= $r['SessionID'] ?></td>
-                            <td><?= htmlspecialchars($r['StudentID']) ?></td>
-                            <td><?= htmlspecialchars($r['FirstName'].' '.$r['LastName']) ?></td>
-                            <td><?= htmlspecialchars($r['Purpose'] ?? '—') ?></td>
-                            <td><?= htmlspecialchars($r['Lab'] ?? '—') ?></td>
-                            <td><?= $r['PCNumber'] ? '<span style="font-weight:700;color:var(--purple);">PC '.$r['PCNumber'].'</span>' : '<span class="text-muted">—</span>' ?></td>
-                            <td><?= htmlspecialchars($r['TimeIn']) ?></td>
-                            <td><?= htmlspecialchars($r['SessionDate']) ?></td>
-                            <td>
-                                <span style="<?= $rbadge ?> padding:3px 10px;border-radius:5px;font-size:0.78rem;font-weight:600;">
-                                    <?= htmlspecialchars($r['Status']) ?>
-                                </span>
-                            </td>
-                            <td>
-                                <?php if (strtolower($r['Status']) === 'pending'): ?>
-                                    <div class="d-flex gap-1">
-                                        <form method="POST" style="display:inline;">
-                                            <input type="hidden" name="res_id" value="<?= $r['SessionID'] ?>">
-                                            <button name="approve_reservation" class="btn btn-sm btn-success" style="font-size:0.75rem;padding:3px 10px;">
-                                                <i class="fa fa-check me-1"></i>Approve
-                                            </button>
-                                        </form>
-                                        <form method="POST" style="display:inline;" onsubmit="return confirm('Reject this reservation?')">
-                                            <input type="hidden" name="res_id" value="<?= $r['SessionID'] ?>">
-                                            <button name="reject_reservation" class="btn btn-sm btn-danger" style="font-size:0.75rem;padding:3px 10px;">
-                                                <i class="fa fa-xmark me-1"></i>Reject
-                                            </button>
-                                        </form>
-                                    </div>
-                                <?php elseif (strtolower($r['Status']) === 'active'): ?>
-                                    <div class="dropdown">
-                                        <button class="btn btn-sm btn-purple dropdown-toggle" type="button" data-bs-toggle="dropdown" style="font-size:0.75rem;padding:3px 10px;">
-                                            <i class="fa fa-ellipsis me-1"></i>Actions
-                                        </button>
-                                        <ul class="dropdown-menu dropdown-menu-end shadow" style="font-size:0.85rem;min-width:180px;">
-                                            <li>
-                                                <form method="POST" onsubmit="return confirm('Terminate this session?')">
-                                                    <input type="hidden" name="session_id" value="<?= $r['SessionID'] ?>">
-                                                    <button name="logout_session" type="submit" class="dropdown-item text-danger">
-                                                        <i class="fa fa-circle-stop me-2"></i>Terminate Session
-                                                    </button>
-                                                </form>
-                                            </li>
-                                            <li><hr class="dropdown-divider"></li>
-                                            <li>
-                                                <button class="dropdown-item text-muted" disabled>
-                                                    <i class="fa fa-arrow-right-arrow-left me-2"></i>Transfer PC
-                                                    <span style="font-size:0.7rem;background:#eee;color:#999;border-radius:4px;padding:1px 5px;margin-left:4px;">Soon</span>
-                                                </button>
-                                            </li>
-                                        </ul>
-                                    </div>
-                                <?php else: ?>
-                                    <span class="text-muted" style="font-size:0.78rem;">—</span>
-                                <?php endif; ?>
-                            </td>
-                        </tr>
-                    <?php endwhile; else: ?>
-                        <tr>
-                            <td colspan="10" class="text-center text-muted py-4">
-                                <i class="fa fa-calendar-xmark me-2"></i>No reservations found.
-                            </td>
-                        </tr>
-                    <?php endif; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-
-
-    <!-- ══════════════ SIT-IN FORM TAB ══════════════ -->
-    <?php elseif ($active_tab === 'sitinform'): ?>
-
-    <div class="row g-4 justify-content-center">
-        <div class="col-lg-7">
-            <div class="dash-card">
-                <div class="card-header-purple">
-                    <i class="fa fa-magnifying-glass me-2"></i>Search Student
-                </div>
-                <div class="card-body">
-                    <!-- Search box -->
-                    <div class="mb-3">
-                        <label class="form-label" style="font-size:0.8rem;color:#777;">Search by ID Number or Name</label>
-                        <input type="text" id="studentLookup" class="form-control" placeholder="e.g. 2024-00001 or Juan Dela Cruz" autocomplete="off">
-                    </div>
-
-                    <!-- Search results dropdown -->
-                    <div id="searchResults" class="mb-4" style="display:none;">
-                        <div style="font-size:0.78rem;color:#999;margin-bottom:6px;">Select a student:</div>
-                        <div id="resultsList"></div>
-                    </div>
-
-                    <!-- Sit-in Form (hidden until student selected) -->
-                    <form method="POST" id="sitinForm" style="display:none;">
-                        <?php if (isset($sitin_error)): ?>
-                            <div class="alert alert-danger py-2 px-3" style="font-size:0.85rem;border-radius:8px;">
-                                <i class="fa fa-circle-exclamation me-2"></i><?= htmlspecialchars($sitin_error) ?>
-                            </div>
-                        <?php endif; ?>
-
-                        <div style="background:#f8f4fc;border-radius:10px;padding:1rem;margin-bottom:1rem;">
-                            <div style="font-size:0.72rem;color:var(--purple);font-weight:700;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px;">Selected Student</div>
-                            <div class="row g-2">
-                                <div class="col-sm-6">
-                                    <div style="font-size:0.78rem;color:#999;">ID Number</div>
-                                    <div id="display_id" style="font-weight:700;color:#333;"></div>
-                                </div>
-                                <div class="col-sm-6">
-                                    <div style="font-size:0.78rem;color:#999;">Name</div>
-                                    <div id="display_name" style="font-weight:700;color:#333;"></div>
-                                </div>
-                                <div class="col-sm-6">
-                                    <div style="font-size:0.78rem;color:#999;">Course</div>
-                                    <div id="display_course" style="font-weight:600;color:#555;"></div>
-                                </div>
-                                <div class="col-sm-6">
-                                    <div style="font-size:0.78rem;color:#999;">Year Level</div>
-                                    <div id="display_level" style="font-weight:600;color:#555;"></div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <input type="hidden" name="sitin_id" id="sitin_id">
-
-                        <div class="mb-3">
-                            <label class="form-label" style="font-size:0.8rem;color:#777;">Purpose</label>
-                            <select name="sitin_purpose" class="form-select" required>
-                                <option value="">Select purpose</option>
-                                <option>C Programming</option>
-                                <option>Java Programming</option>
-                                <option>PHP Programming</option>
-                                <option>ASP.Net Programming</option>
-                                <option>C# Programming</option>
-                                <option>Database</option>
-                                <option>Research</option>
-                                <option>Other</option>
-                            </select>
-                        </div>
-                        <div class="mb-4">
-                            <label class="form-label" style="font-size:0.8rem;color:#777;">Lab</label>
-                            <select name="sitin_lab" class="form-select" required>
-                                <option value="">Select lab</option>
-                                <option>524</option>
-                                <option>526</option>
-                                <option>528</option>
-                                <option>530</option>
-                                <option>542</option>
-                                <option>Mac Lab</option>
-                            </select>
-                        </div>
-
-                        <div class="d-flex gap-2">
-                            <button type="button" class="btn btn-secondary btn-sm px-3" onclick="resetSitinForm()">
-                                <i class="fa fa-xmark me-1"></i>Cancel
-                            </button>
-                            <button type="submit" name="do_sitin" class="btn btn-gold px-4">
-                                <i class="fa fa-right-to-bracket me-2"></i>Sit In
-                            </button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-        </div>
-    </div>
-
-
-    <!-- ══════════════ FEEDBACK TAB ══════════════ -->
-    <?php elseif ($active_tab === 'feedback'): ?>
-
-    <?php
-    $avg_rating = $conn->query("SELECT ROUND(AVG(Rating),1) as avg FROM feedback")->fetch_assoc()['avg'];
-    $total_fb   = $conn->query("SELECT COUNT(*) as c FROM feedback")->fetch_assoc()['c'];
-    $dist       = $conn->query("SELECT Rating, COUNT(*) as cnt FROM feedback GROUP BY Rating ORDER BY Rating DESC")->fetch_all(MYSQLI_ASSOC);
-    ?>
-
-    <!-- Summary cards -->
-    <div class="row g-3 mb-4">
-        <div class="col-md-4">
-            <div class="stat-card">
-                <div class="stat-icon gold"><i class="fa fa-star"></i></div>
-                <div>
-                    <div class="stat-num"><?= $avg_rating ?: '—' ?></div>
-                    <div class="stat-label">Average Rating</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-4">
-            <div class="stat-card">
-                <div class="stat-icon purple"><i class="fa fa-comments"></i></div>
-                <div>
-                    <div class="stat-num"><?= $total_fb ?></div>
-                    <div class="stat-label">Total Feedbacks</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-4">
-            <div class="dash-card p-3">
-                <div style="font-size:0.72rem;color:var(--purple);font-weight:700;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:10px;">Rating Distribution</div>
+<main class="main-wrapper">
+    <div class="header-section">
+        <div>
+            <div class="vital-label mb-1">ADMIN ACCOUNT</div>
+            <h1>
                 <?php
-                $dist_map = array_column($dist, 'cnt', 'Rating');
-                for ($r = 5; $r >= 1; $r--):
-                    $cnt = $dist_map[$r] ?? 0;
-                    $pct = $total_fb > 0 ? round(($cnt / $total_fb) * 100) : 0;
+                $titles = ['dashboard'=>'Overview','students'=>'Student List','sitin'=>'Live Monitor','sitinform'=>'Add Sit-in','reservations'=>'Reservations','announcements'=>'Announcements','records'=>'History','labs'=>'Labs'];
+                echo $titles[$active_tab] ?? 'Dashboard';
                 ?>
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;">
-                    <span style="font-size:0.75rem;color:#999;width:12px;"><?= $r ?></span>
-                    <i class="fa fa-star" style="color:#c09412;font-size:0.75rem;"></i>
-                    <div style="flex:1;height:8px;border-radius:4px;background:#f0f0f0;overflow:hidden;">
-                        <div style="width:<?= $pct ?>%;height:100%;background:var(--gold);border-radius:4px;"></div>
-                    </div>
-                    <span style="font-size:0.75rem;color:#999;width:24px;"><?= $cnt ?></span>
-                </div>
-                <?php endfor; ?>
-            </div>
+            </h1>
+        </div>
+        <div class="text-end">
+            <div class="fw-800 small"><?= date('l, M d') ?></div>
+            <div class="small text-dim"><?= date('h:i A') ?></div>
         </div>
     </div>
 
-    <!-- Feedback table -->
-    <div class="dash-card">
-        <div class="card-header-purple d-flex justify-content-between align-items-center">
-            <span><i class="fa fa-star me-2"></i>All Student Feedback</span>
-            <input type="text" id="feedbackSearch" class="search-box" placeholder="Search..." style="width:180px;">
+    <?php if ($active_tab === 'dashboard'): ?>
+    <div class="bento-grid">
+        <div class="bento-card tile-small"><div class="card-title">Registered</div><div class="vital-sign"><div class="vital-value"><?= $total_students ?></div><div class="vital-label">Students</div></div></div>
+        <div class="bento-card tile-small"><div class="card-title">Active</div><div class="vital-sign"><div class="vital-value text-success"><?= $currently_sitin ?></div><div class="vital-label">Sit-ins</div></div></div>
+        <div class="bento-card tile-small"><div class="card-title">Pending</div><div class="vital-sign"><div class="vital-value text-gold"><?= $pending_res ?></div><div class="vital-label">Bookings</div></div></div>
+        <div class="bento-card tile-small"><div class="card-title">History</div><div class="vital-sign"><div class="vital-value"><?= $total_sitin ?></div><div class="vital-label">Total Logs</div></div></div>
+
+        <div class="bento-card tile-large">
+            <div class="card-title">Current Sit-ins</div>
+            <div class="glass-table-container">
+                <?php
+                $live = $conn->query("SELECT s.*, st.FirstName, st.LastName FROM sit_in_sessions s JOIN students_info st ON s.StudentID = st.IdNumber WHERE s.Status = 'Active' ORDER BY s.TimeIn DESC LIMIT 6");
+                if ($live->num_rows > 0): while($l = $live->fetch_assoc()):
+                ?>
+                <div class="lab-item"><div class="lab-avatar"><?= substr($l['FirstName'],0,1) ?></div><div class="flex-fill"><div class="fw-800 small"><?= $l['FirstName'].' '.$l['LastName'] ?></div><div class="text-dim small fw-600">Lab <?= $l['Lab'] ?> • PC <?= $l['PCNumber']?:'—' ?></div></div><div class="text-end small fw-800 text-gold"><?= date('h:i A',strtotime($l['TimeIn'])) ?></div></div>
+                <?php endwhile; else: echo '<div class="h-100 d-flex align-items-center justify-content-center text-dim small">No active students.</div>'; endif; ?>
+            </div>
         </div>
-        <div class="card-body p-0">
-            <div class="table-responsive">
-                <table class="table table-hover mb-0" id="feedbackTable">
-                    <thead>
-                        <tr>
-                            <th>Student</th>
-                            <th>ID Number</th>
-                            <th>Rating</th>
-                            <th>Comments</th>
-                            <th>Session Date</th>
-                            <th>Purpose</th>
-                            <th>Lab</th>
-                            <th>Submitted</th>
-                        </tr>
-                    </thead>
+
+        <div class="bento-card tile-medium">
+            <div class="card-title">Usage Analysis</div>
+            <div class="chart-container"><canvas id="usageChart"></canvas></div>
+            <?php $purpose_q = $conn->query("SELECT Purpose, COUNT(*) as count FROM sit_in_sessions WHERE Purpose!='' GROUP BY Purpose ORDER BY count DESC LIMIT 5"); $purposes=[]; $counts=[]; while($p=$purpose_q->fetch_assoc()){$purposes[]=$p['Purpose'];$counts[]=$p['count'];} ?>
+        </div>
+
+        <div class="bento-card tile-wide">
+            <div class="card-title d-flex justify-content-between"><span>Recent Activity</span><a href="?tab=records" class="text-dim small fw-700">View All →</a></div>
+            <div class="glass-table-container">
+                <table class="glass-table">
+                    <thead><tr><th>Student</th><th>Lab & PC</th><th>Purpose</th><th>Time In</th><th>Status</th></tr></thead>
                     <tbody>
-                    <?php
-                    $fb = $conn->query("
-                        SELECT f.*, st.FirstName, st.LastName, s.SessionDate, s.Purpose, s.Lab
-                        FROM feedback f
-                        JOIN students_info st ON f.StudentID = st.IdNumber
-                        JOIN sit_in_sessions s ON f.SessionID = s.SessionID
-                        ORDER BY f.DatePosted DESC
-                    ");
-                    if ($fb && $fb->num_rows > 0):
-                        while ($f = $fb->fetch_assoc()):
-                            $stars = '';
-                            for ($x = 1; $x <= 5; $x++)
-                                $stars .= $x <= $f['Rating'] ? '★' : '☆';
-                            $star_color = $f['Rating'] >= 4 ? '#198754' : ($f['Rating'] >= 3 ? '#c09412' : '#dc3545');
-                    ?>
-                        <tr>
-                            <td><b><?= htmlspecialchars($f['FirstName'].' '.$f['LastName']) ?></b></td>
-                            <td style="font-size:0.8rem;"><?= htmlspecialchars($f['StudentID']) ?></td>
-                            <td>
-                                <span style="color:<?= $star_color ?>;font-size:1rem;letter-spacing:1px;"><?= $stars ?></span>
-                                <span style="font-size:0.75rem;color:#999;margin-left:3px;">(<?= $f['Rating'] ?>/5)</span>
-                            </td>
-                            <td style="font-size:0.85rem;max-width:200px;">
-                                <?= $f['Message'] ? htmlspecialchars($f['Message']) : '<span class="text-muted">No comment</span>' ?>
-                            </td>
-                            <td><?= htmlspecialchars($f['SessionDate']) ?></td>
-                            <td><?= htmlspecialchars($f['Purpose'] ?? '—') ?></td>
-                            <td><?= htmlspecialchars($f['Lab'] ?? '—') ?></td>
-                            <td style="font-size:0.8rem;"><?= htmlspecialchars($f['DatePosted']) ?></td>
-                        </tr>
-                    <?php endwhile; else: ?>
-                        <tr><td colspan="8" class="text-center text-muted py-4">
-                            <i class="fa fa-star fa-2x mb-2 d-block" style="color:#ddd;"></i>No feedback yet.
-                        </td></tr>
-                    <?php endif; ?>
+                        <?php $recent = $conn->query("SELECT s.*, st.FirstName, st.LastName FROM sit_in_sessions s JOIN students_info st ON s.StudentID = st.IdNumber ORDER BY s.SessionID DESC LIMIT 5"); while($r=$recent->fetch_assoc()): ?>
+                        <tr><td><div class="fw-800"><?= $r['FirstName'].' '.$r['LastName'] ?></div><div class="text-dim small fw-600"><?= $r['StudentID'] ?></div></td><td>Lab <?= $r['Lab'] ?> • PC <?= $r['PCNumber']?:'—' ?></td><td><?= $r['Purpose'] ?></td><td><?= date('h:i A',strtotime($r['TimeIn'])) ?></td><td><span class="status-badge <?= strtolower($r['Status'])==='active'?'status-active':'status-completed' ?>"><?= $r['Status'] ?></span></td></tr>
+                        <?php endwhile; ?>
                     </tbody>
                 </table>
             </div>
         </div>
     </div>
 
-
-    <!-- ══════════════ LABS & PCs TAB ══════════════ -->
-    <?php elseif ($active_tab === 'labs'): ?>
-
-    <?php $labs = $conn->query("SELECT * FROM labs ORDER BY LabName ASC"); ?>
-
-    <div class="row g-4">
-
-        <!-- Add new lab -->
-        <div class="col-md-4">
-            <div class="dash-card">
-                <div class="card-header-gold"><i class="fa fa-plus me-2"></i>Add New Lab</div>
-                <div class="card-body">
-                    <form method="POST">
-                        <div class="mb-3">
-                            <label class="form-label" style="font-size:0.8rem;color:#777;">Lab Name / Number</label>
-                            <input type="text" name="lab_name" class="form-control" placeholder="e.g. 524, Mac Lab" required>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label" style="font-size:0.8rem;color:#777;">Number of PCs</label>
-                            <input type="number" name="lab_count" class="form-control" min="1" max="100" value="40" required>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label" style="font-size:0.8rem;color:#777;">Description <span class="text-muted">(optional)</span></label>
-                            <input type="text" name="lab_desc_new" class="form-control" placeholder="e.g. 2nd Floor, Building A">
-                        </div>
-                        <button type="submit" name="add_lab" class="btn btn-gold w-100">
-                            <i class="fa fa-plus me-2"></i>Add Lab
-                        </button>
-                    </form>
-                </div>
-            </div>
+    <?php elseif ($active_tab === 'students'): ?>
+    <div class="bento-card tile-wide">
+        <div class="card-title d-flex justify-content-between"><span>Student List</span><input type="text" id="studentSearch" class="search-bar w-25" placeholder="Search..."></div>
+        <div class="glass-table-container">
+            <table class="glass-table" id="studentTable">
+                <thead><tr><th>Student</th><th>Course</th><th>Logs</th><th>Progress</th><th class="text-end">Action</th></tr></thead>
+                <tbody>
+                    <?php $stu=$conn->query("SELECT si.*,30 as MaxCredits,COUNT(s.SessionID) as Used FROM students_info si LEFT JOIN sit_in_sessions s ON s.StudentID=si.IdNumber AND (s.Type='Sit-in' OR s.Type IS NULL) WHERE si.is_admin=0 GROUP BY si.IdNumber ORDER BY si.LastName");
+                    while($s=$stu->fetch_assoc()): $rem=max(0,30-$s['Used']); $pct=round(($rem/30)*100); $clr=$rem>15?'#2ecc71':($rem>5?'#c09412':'#e74c3c'); ?>
+                    <tr><td><div class="fw-800"><?= $s['LastName'].', '.$s['FirstName'] ?></div><div class="text-dim small fw-600"><?= $s['IdNumber'] ?></div></td><td><?= $s['Course'] ?> L<?= $s['CourseLevel'] ?></td><td><?= $s['Used'] ?>/30</td><td><div style="width:100px; height:4px; background:rgba(0,0,0,0.05); border-radius:10px;"><div style="width:<?= $pct ?>%; height:100%; background:<?= $clr ?>; border-radius:10px;"></div></div></td><td class="text-end"><button class="btn-action py-1 px-3" onclick="openEdit('<?= $s['IdNumber'] ?>','<?= $s['FirstName'] ?>','<?= $s['LastName'] ?>','<?= $s['Course'] ?>','<?= $s['CourseLevel'] ?>')">Edit</button></td></tr>
+                    <?php endwhile; ?>
+                </tbody>
+            </table>
         </div>
-
-        <!-- Labs list with PC visual grid -->
-        <div class="col-md-8">
-            <?php if ($labs && $labs->num_rows > 0):
-                while ($lab = $labs->fetch_assoc()):
-                    // Get occupied PCs today
-                    $today = date('Y-m-d');
-                    $occ_q = $conn->prepare("SELECT PCNumber FROM sit_in_sessions WHERE Lab=? AND SessionDate=? AND Status='Active' AND PCNumber IS NOT NULL");
-                    $occ_q->bind_param("ss", $lab['LabName'], $today);
-                    $occ_q->execute();
-                    $occ_rows = $occ_q->get_result()->fetch_all(MYSQLI_ASSOC);
-                    $occ_q->close();
-                    $occupied_pcs = array_column($occ_rows, 'PCNumber');
-                    $total_pcs    = (int)$lab['PCCount'];
-                    $occ_count    = count($occupied_pcs);
-                    $avail_count  = $total_pcs - $occ_count;
-            ?>
-            <div class="dash-card mb-4">
-                <div class="card-header-purple d-flex justify-content-between align-items-center">
-                    <span>
-                        <i class="fa fa-door-open me-2"></i>Lab <?= htmlspecialchars($lab['LabName']) ?>
-                        <?php if ($lab['Description']): ?>
-                            <span style="font-weight:400;font-size:0.8rem;opacity:0.8;margin-left:6px;"><?= htmlspecialchars($lab['Description']) ?></span>
-                        <?php endif; ?>
-                    </span>
-                    <div class="d-flex align-items-center gap-2">
-                        <span style="background:rgba(255,255,255,0.2);border-radius:20px;padding:2px 10px;font-size:0.75rem;">
-                            <?= $avail_count ?>/<?= $total_pcs ?> available
-                        </span>
-                        <button class="btn btn-sm" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.3);border-radius:6px;font-size:0.75rem;"
-                            onclick="toggleEdit(<?= $lab['LabID'] ?>)">
-                            <i class="fa fa-pen me-1"></i>Edit
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Edit form (hidden by default) -->
-                <div id="editLab_<?= $lab['LabID'] ?>" style="display:none;background:#f8f4fc;padding:12px 16px;border-bottom:1px solid #eee;">
-                    <form method="POST" class="row g-2 align-items-end">
-                        <input type="hidden" name="lab_id" value="<?= $lab['LabID'] ?>">
-                        <div class="col-sm-2">
-                            <label style="font-size:0.75rem;color:#777;">Lab Name</label>
-                            <input type="text" name="lab_name" class="form-control form-control-sm" value="<?= htmlspecialchars($lab['LabName']) ?>" required>
-                        </div>
-                        <div class="col-sm-2">
-                            <label style="font-size:0.75rem;color:#777;">PC Count</label>
-                            <input type="number" name="pc_count" class="form-control form-control-sm" value="<?= $total_pcs ?>" min="1" max="100" required>
-                        </div>
-                        <div class="col-sm-4">
-                            <label style="font-size:0.75rem;color:#777;">Description</label>
-                            <input type="text" name="lab_desc" class="form-control form-control-sm" value="<?= htmlspecialchars($lab['Description'] ?? '') ?>">
-                        </div>
-                        <div class="col-sm-4 d-flex gap-2">
-                            <button type="submit" name="update_lab" class="btn btn-sm btn-gold flex-fill">
-                                <i class="fa fa-save me-1"></i>Save
-                            </button>
-                            <form method="POST" style="margin:0;" onsubmit="return confirm('Delete this lab?')">
-                                <input type="hidden" name="lab_id" value="<?= $lab['LabID'] ?>">
-                                <button type="submit" name="delete_lab" class="btn btn-sm btn-danger">
-                                    <i class="fa fa-trash"></i>
-                                </button>
-                            </form>
-                        </div>
-                    </form>
-                </div>
-
-                <div class="card-body">
-                    <!-- Legend -->
-                    <div class="d-flex gap-3 mb-3 flex-wrap">
-                        <div style="display:flex;align-items:center;gap:6px;font-size:0.75rem;color:#666;">
-                            <div style="width:16px;height:16px;border-radius:4px;background:#e9f7ef;border:2px solid #198754;"></div> Available (<?= $avail_count ?>)
-                        </div>
-                        <div style="display:flex;align-items:center;gap:6px;font-size:0.75rem;color:#666;">
-                            <div style="width:16px;height:16px;border-radius:4px;background:#fde8e8;border:2px solid #dc3545;"></div> Occupied (<?= $occ_count ?>)
-                        </div>
-                    </div>
-
-                    <!-- PC Grid -->
-                    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(48px,1fr));gap:8px;">
-                        <?php for ($p = 1; $p <= $total_pcs; $p++):
-                            $is_occ = in_array($p, $occupied_pcs);
-                        ?>
-                        <div title="PC <?= $p ?> — <?= $is_occ ? 'Occupied' : 'Available' ?>"
-                            style="
-                                border-radius:8px;
-                                padding:6px 4px;
-                                text-align:center;
-                                border:2px solid <?= $is_occ ? '#dc3545' : '#198754' ?>;
-                                background:<?= $is_occ ? '#fde8e8' : '#e9f7ef' ?>;
-                                color:<?= $is_occ ? '#dc3545' : '#198754' ?>;
-                                font-size:0.7rem;
-                                font-weight:700;
-                            ">
-                            <i class="fa fa-desktop" style="font-size:1rem;display:block;margin-bottom:2px;"></i>
-                            PC <?= $p ?>
-                        </div>
-                        <?php endfor; ?>
-                    </div>
-                </div>
-            </div>
-            <?php endwhile; else: ?>
-                <div class="dash-card p-5 text-center text-muted">
-                    <i class="fa fa-desktop fa-3x mb-3" style="color:#ddd;"></i>
-                    <p>No labs configured yet. Add one on the left.</p>
-                </div>
-            <?php endif; ?>
-        </div>
-
     </div>
 
+    <?php elseif ($active_tab === 'sitin'): ?>
+    <div class="bento-card tile-wide">
+        <div class="card-title d-flex justify-content-between"><span>Live Lab Monitor</span><form method="POST"><?php csrf_input(); ?><button name="reset_all_sessions" class="btn-action bg-danger">End All</button></form></div>
+        <div class="glass-table-container">
+            <table class="glass-table">
+                <thead><tr><th>Student</th><th>Lab & PC</th><th>Purpose</th><th>Start Time</th><th class="text-end">Action</th></tr></thead>
+                <tbody>
+                    <?php $sit=$conn->query("SELECT s.*, st.FirstName, st.LastName FROM sit_in_sessions s JOIN students_info st ON s.StudentID=st.IdNumber WHERE s.Status='Active' ORDER BY s.TimeIn DESC");
+                    while($r=$sit->fetch_assoc()): ?>
+                    <tr><td><div class="fw-800"><?= $r['FirstName'].' '.$r['LastName'] ?></div><div class="text-dim small fw-600"><?= $r['StudentID'] ?></div></td><td>Lab <?= $r['Lab'] ?> • PC <?= $r['PCNumber']?:'—' ?></td><td><?= $r['Purpose'] ?></td><td><?= date('h:i A',strtotime($r['TimeIn'])) ?></td><td class="text-end"><form method="POST"><?php csrf_input(); ?><input type="hidden" name="session_id" value="<?= $r['SessionID'] ?>"><button name="logout_session" class="btn-action bg-danger py-1 px-3">Logout</button></form></td></tr>
+                    <?php endwhile; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <?php elseif ($active_tab === 'sitinform'): ?>
+    <div class="row justify-content-center"><div class="col-md-5"><div class="bento-card"><div class="card-title">Add Sit-in Entry</div><input type="text" id="studentLookup" class="search-bar mb-3" placeholder="Student name or ID..."><div id="searchResults" style="display:none;" class="mb-3"><div id="resultsList" class="d-flex flex-column gap-2"></div></div><form method="POST" id="sitinForm" style="display:none;"><?php csrf_input(); ?><input type="hidden" name="sitin_id" id="sitin_id"><div class="p-3 rounded-4 mb-3" style="background:var(--purple-soft);"><div class="vital-label">Selected Student</div><div id="display_name" class="fw-800"></div><div id="display_id" class="text-gold small fw-800"></div></div><div class="row g-2 mb-3"><div class="col-6"><label class="small fw-800">Purpose</label><select name="sitin_purpose" class="form-select"><option>C Programming</option><option>Java Programming</option><option>Research</option></select></div><div class="col-6"><label class="small fw-800">Lab</label><select name="sitin_lab" class="form-select"><?php $lb=$conn->query("SELECT LabName FROM labs"); while($l=$lb->fetch_assoc()) echo "<option>".$l['LabName']."</option>"; ?></select></div></div><button type="submit" name="do_sitin" class="btn-action w-100 py-3">START SESSION</button></form></div></div></div>
+
+    <?php elseif ($active_tab === 'reservations'): ?>
+    <div class="bento-card tile-wide">
+        <div class="card-title">Pending Reservations</div>
+        <div class="glass-table-container">
+            <table class="glass-table">
+                <thead><tr><th>Date</th><th>Student</th><th>Lab & PC</th><th>Status</th><th class="text-end">Action</th></tr></thead>
+                <tbody>
+                    <?php $rv=$conn->query("SELECT s.*, st.FirstName, st.LastName FROM sit_in_sessions s JOIN students_info st ON s.StudentID=st.IdNumber WHERE s.Type='Reservation' ORDER BY SessionDate ASC");
+                    while($r=$rv->fetch_assoc()): $st=strtolower($r['Status']); ?>
+                    <tr><td><?= $r['SessionDate'] ?></td><td><?= $r['FirstName'].' '.$r['LastName'] ?></td><td>Lab <?= $r['Lab'] ?> • PC <?= $r['PCNumber']?:'Any' ?></td><td><span class="status-badge <?= $st==='pending'?'bg-warning text-dark':'bg-primary text-white' ?>"><?= $r['Status'] ?></span></td><td class="text-end"><?php if($st==='pending'): ?><form method="POST" class="d-inline"><?php csrf_input(); ?><input type="hidden" name="res_id" value="<?= $r['SessionID'] ?>"><button name="approve_reservation" class="btn-action py-1 px-2 me-1">Approve</button><button name="reject_reservation" class="btn-action bg-danger py-1 px-2">Reject</button></form><?php endif; ?></td></tr>
+                    <?php endwhile; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <?php elseif ($active_tab === 'announcements'): ?>
+    <div class="row g-4"><div class="col-md-4"><div class="bento-card"><div class="card-title">Post Announcement</div><form method="POST"><?php csrf_input(); ?><div class="mb-2"><label class="small fw-800">Title</label><input type="text" name="ann_title" class="form-control" required></div><div class="mb-3"><label class="small fw-800">Message</label><textarea name="ann_message" class="form-control" rows="4" required></textarea></div><button type="submit" name="post_announcement" class="btn-action w-100 py-3">POST NOW</button></form></div></div><div class="col-md-8"><div class="bento-card h-100"><div class="card-title">Past Announcements</div><div class="d-flex flex-column gap-3 overflow-auto" style="max-height: 400px;"><?php $an=$conn->query("SELECT * FROM announcements ORDER BY DatePosted DESC"); while($a=$an->fetch_assoc()): ?><div class="p-3 rounded-4 bg-light"><div class="d-flex justify-content-between"><strong><?= $a['Title'] ?></strong><form method="POST"><?php csrf_input(); ?><input type="hidden" name="ann_id" value="<?= $a['AnnouncementID'] ?>"><button name="delete_announcement" class="btn text-danger py-0"><i class="fa fa-trash"></i></button></form></div><p class="small mb-1"><?= $a['Message'] ?></p><div class="small opacity-50"><?= $a['DatePosted'] ?></div></div><?php endwhile; ?></div></div></div></div>
+
+    <?php elseif ($active_tab === 'records'): ?>
+    <div class="bento-card tile-wide">
+        <div class="card-title">Sit-in History</div>
+        <div class="glass-table-container">
+            <table class="glass-table">
+                <thead><tr><th>Date</th><th>Student</th><th>Lab & PC</th><th>Purpose</th><th>Time Range</th><th>Status</th></tr></thead>
+                <tbody>
+                    <?php $rc=$conn->query("SELECT s.*,st.FirstName,st.LastName FROM sit_in_sessions s JOIN students_info st ON s.StudentID=st.IdNumber ORDER BY SessionDate DESC LIMIT 50"); while($r=$rc->fetch_assoc()): ?>
+                    <tr><td><?= $r['SessionDate'] ?></td><td><?= $r['FirstName'].' '.$r['LastName'] ?></td><td>Lab <?= $r['Lab'] ?> • PC <?= $r['PCNumber']?:'—' ?></td><td><?= $r['Purpose'] ?></td><td><?= substr($r['TimeIn'],0,5) ?> - <?= $r['TimeOut']?substr($r['TimeOut'],0,5):'LIVE' ?></td><td><span class="status-badge <?= strtolower($r['Status'])==='active'?'status-active':'status-completed' ?>"><?= $r['Status'] ?></span></td></tr>
+                    <?php endwhile; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <?php elseif ($active_tab === 'labs'): ?>
+    <div class="bento-card tile-wide">
+        <div class="card-title d-flex justify-content-between"><span>Laboratory Management</span><button class="btn-action" data-bs-toggle="modal" data-bs-target="#addLabModal">Add New Lab</button></div>
+        <div class="glass-table-container">
+            <table class="glass-table">
+                <thead><tr><th>Lab Name</th><th>PCs</th><th>Location / Notes</th><th class="text-end">Action</th></tr></thead>
+                <tbody>
+                    <?php $lb=$conn->query("SELECT * FROM labs ORDER BY LabName"); while($l=$lb->fetch_assoc()): ?>
+                    <tr><td><strong>Lab <?= $l['LabName'] ?></strong></td><td><?= $l['PCCount'] ?></td><td><?= $l['Description'] ?></td><td class="text-end"><button class="btn-action py-1 px-3" onclick="toggleEdit(<?= $l['LabID'] ?>)">Edit</button><form method="POST" class="d-inline"><?php csrf_input(); ?><input type="hidden" name="lab_id" value="<?= $l['LabID'] ?>"><button name="delete_lab" class="btn text-danger ms-2"><i class="fa fa-trash"></i></button></form><div id="editLab_<?= $l['LabID'] ?>" style="display:none;" class="mt-2 text-start p-3 bg-white rounded-4 border"><form method="POST"><?php csrf_input(); ?><input type="hidden" name="lab_id" value="<?= $l['LabID'] ?>"><div class="row g-2"><div class="col-8"><input type="text" name="lab_name" class="form-control" value="<?= $l['LabName'] ?>"></div><div class="col-4"><input type="number" name="pc_count" class="form-control" value="<?= $l['PCCount'] ?>"></div><div class="col-12"><textarea name="lab_desc" class="form-control mt-1"><?= $l['Description'] ?></textarea></div><button type="submit" name="update_lab" class="btn-action w-100 mt-2">Save</button></div></form></div></td></tr>
+                    <?php endwhile; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
     <?php endif; ?>
 
-</div><!-- end main-content -->
+    <div class="modal fade" id="editStudentModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header"><h5 class="fw-800">Edit Student Profile</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><form method="POST"><?php csrf_input(); ?><div class="modal-body"><input type="hidden" name="edit_id" id="edit_id"><div class="row g-3"><div class="col-6"><label class="small fw-800">First Name</label><input type="text" name="edit_first" id="edit_first" class="form-control"></div><div class="col-6"><label class="small fw-800">Last Name</label><input type="text" name="edit_last" id="edit_last" class="form-control"></div><div class="col-8"><label class="small fw-800">Course</label><input type="text" name="edit_course" id="edit_course" class="form-control"></div><div class="col-4"><label class="small fw-800">Year</label><input type="number" name="edit_level" id="edit_level" class="form-control"></div></div></div><div class="modal-footer border-0"><button type="submit" name="edit_student" class="btn-action w-100 py-3">Save Changes</button></div></form></div></div></div>
+    <div class="modal fade" id="addLabModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header"><h5 class="fw-800">Add New Lab</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><form method="POST"><?php csrf_input(); ?><div class="modal-body"><div class="mb-2"><label class="small fw-800">Lab Name</label><input type="text" name="lab_name" class="form-control"></div><div class="mb-2"><label class="small fw-800">Total PCs</label><input type="number" name="lab_count" class="form-control"></div><div class="mb-2"><label class="small fw-800">Notes</label><textarea name="lab_desc_new" class="form-control"></textarea></div></div><div class="modal-footer border-0"><button type="submit" name="add_lab" class="btn-action w-100 py-3">Save Laboratory</button></div></form></div></div></div>
+</main>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-// Edit student modal
-function openEdit(id, first, last, course, level) {
-    document.getElementById('edit_id').value    = id;
-    document.getElementById('edit_first').value = first;
-    document.getElementById('edit_last').value  = last;
-    document.getElementById('edit_course').value= course;
-    document.getElementById('edit_level').value = level;
-    new bootstrap.Modal(document.getElementById('editStudentModal')).show();
-}
-
-// Live search — students
-const studentSearch = document.getElementById('studentSearch');
-if (studentSearch) {
-    studentSearch.addEventListener('input', function () {
-        const q = this.value.toLowerCase();
-        document.querySelectorAll('#studentTable tbody tr').forEach(tr => {
-            tr.style.display = tr.innerText.toLowerCase().includes(q) ? '' : 'none';
-        });
-    });
-}
-
-// Live search — records
-const recordSearch = document.getElementById('recordSearch');
-if (recordSearch) {
-    recordSearch.addEventListener('input', function () {
-        const q = this.value.toLowerCase();
-        document.querySelectorAll('#recordTable tbody tr').forEach(tr => {
-            tr.style.display = tr.innerText.toLowerCase().includes(q) ? '' : 'none';
-        });
-    });
-}
-
-// Sit-in student search
-const lookup = document.getElementById('studentLookup');
-if (lookup) {
-    let debounce;
-    lookup.addEventListener('input', function () {
-        clearTimeout(debounce);
-        const q = this.value.trim();
-        if (q.length < 2) {
-            document.getElementById('searchResults').style.display = 'none';
-            return;
-        }
-        debounce = setTimeout(() => {
-            fetch('admin_dashboard.php?search_student=' + encodeURIComponent(q))
-                .then(r => r.json())
-                .then(data => {
-                    const list = document.getElementById('resultsList');
-                    const box  = document.getElementById('searchResults');
-                    if (data.length === 0) {
-                        list.innerHTML = '<div style="font-size:0.85rem;color:#999;padding:8px;">No students found.</div>';
-                    } else {
-                        list.innerHTML = data.map(s => `
-                            <div class="result-item" onclick="selectStudent('${s.IdNumber}','${s.FirstName}','${s.LastName}','${s.Course}','${s.CourseLevel}')"
-                                style="padding:10px 12px;border-radius:8px;cursor:pointer;border:1px solid #eee;margin-bottom:6px;background:white;transition:background 0.15s;"
-                                onmouseover="this.style.background='#f3eaf9'" onmouseout="this.style.background='white'">
-                                <div style="font-weight:600;font-size:0.88rem;color:#333;">${s.FirstName} ${s.LastName}</div>
-                                <div style="font-size:0.78rem;color:#999;">${s.IdNumber} &mdash; ${s.Course}, Year ${s.CourseLevel}</div>
-                            </div>`).join('');
-                    }
-                    box.style.display = 'block';
-                });
-        }, 300);
-    });
-}
-
-function selectStudent(id, first, last, course, level) {
-    document.getElementById('sitin_id').value      = id;
-    document.getElementById('display_id').innerText    = id;
-    document.getElementById('display_name').innerText  = first + ' ' + last;
-    document.getElementById('display_course').innerText= course;
-    document.getElementById('display_level').innerText = 'Year ' + level;
-    document.getElementById('searchResults').style.display = 'none';
-    document.getElementById('studentLookup').value = first + ' ' + last;
-    document.getElementById('sitinForm').style.display = 'block';
-}
-
-function resetSitinForm() {
-    document.getElementById('sitinForm').style.display = 'none';
-    document.getElementById('studentLookup').value = '';
-    document.getElementById('searchResults').style.display = 'none';
-}
-
-/* ── Feedback live search ── */
-const feedbackSearch = document.getElementById('feedbackSearch');
-if (feedbackSearch) {
-    feedbackSearch.addEventListener('input', function () {
-        const q = this.value.toLowerCase();
-        document.querySelectorAll('#feedbackTable tbody tr').forEach(tr => {
-            tr.style.display = tr.innerText.toLowerCase().includes(q) ? '' : 'none';
-        });
-    });
-}
-
-/* ── Labs edit toggle ── */
-function toggleEdit(labId) {
-    const el = document.getElementById('editLab_' + labId);
-    if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
-}
-
-/* ── Export functions ── */
-function getTableData() {
-    const rows = [];
-    const headers = [];
-    document.querySelectorAll('#recordTable thead th').forEach(th => headers.push(th.innerText.trim()));
-    rows.push(headers);
-    document.querySelectorAll('#recordTable tbody tr').forEach(tr => {
-        if (tr.style.display === 'none') return; // skip filtered rows
-        const row = [];
-        tr.querySelectorAll('td').forEach(td => row.push(td.innerText.trim()));
-        rows.push(row);
-    });
-    return rows;
-}
-
-function exportCSV() {
-    const rows = getTableData();
-    const csv  = rows.map(r => r.map(c => '"' + c.replace(/"/g,'""') + '"').join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const a    = document.createElement('a');
-    a.href     = URL.createObjectURL(blob);
-    a.download = 'sitin_records.csv';
-    a.click();
-}
-
-function exportExcel() {
-    const rows = getTableData();
-    const xmlDecl = '<' + '?xml version="1.0"?' + '>';
-    let xml = xmlDecl + '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">';
-    xml += '<Worksheet ss:Name="Sit-in Records"><Table>';
-    rows.forEach(function(row) {
-        xml += '<Row>';
-        row.forEach(function(cell) {
-            const safe = cell.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-            xml += '<Cell><Data ss:Type="String">' + safe + '</Data></Cell>';
-        });
-        xml += '</Row>';
-    });
-    xml += '</Table></Worksheet></Workbook>';
-    const blob = new Blob([xml], { type: 'application/vnd.ms-excel' });
-    const a    = document.createElement('a');
-    a.href     = URL.createObjectURL(blob);
-    a.download = 'sitin_records.xls';
-    a.click();
-}
-
-function exportPDF() {
-    const { jsPDF } = window.jspdf;
-    const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
-
-    // Header bar
-    doc.setFillColor(92, 43, 122);
-    doc.rect(0, 0, doc.internal.pageSize.getWidth(), 50, 'F');
-
-    // Title
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(14);
-    doc.setFont('helvetica', 'bold');
-    doc.text('CCS Sit-in Monitoring System — Records Report', 40, 22);
-
-    // Subtitle
-    doc.setFontSize(9);
-    doc.setFont('helvetica', 'normal');
-    doc.text('University of Cebu Main Campus — College of Computer Studies', 40, 38);
-
-    // Generated date (right side)
-    const dateStr = 'Generated: ' + new Date().toLocaleString();
-    doc.setFontSize(8);
-    doc.text(dateStr, doc.internal.pageSize.getWidth() - 40, 38, { align: 'right' });
-
-    // Table
-    const rows    = getTableData();
-    const headers = [rows[0]];
-    const body    = rows.slice(1);
-
-    doc.autoTable({
-        head: headers,
-        body: body,
-        startY: 60,
-        margin: { left: 40, right: 40 },
-        styles: {
-            fontSize: 8,
-            cellPadding: 5,
-            overflow: 'linebreak',
-        },
-        headStyles: {
-            fillColor: [92, 43, 122],
-            textColor: 255,
-            fontStyle: 'bold',
-        },
-        alternateRowStyles: {
-            fillColor: [248, 244, 252],
-        },
-        didDrawPage: function(data) {
-            // Footer on each page
-            const pageCount = doc.internal.getNumberOfPages();
-            doc.setFontSize(8);
-            doc.setTextColor(180);
-            doc.text(
-                'Page ' + data.pageNumber + ' of ' + pageCount + '  |  University of Cebu — CCS Sit-in Monitoring System',
-                doc.internal.pageSize.getWidth() / 2,
-                doc.internal.pageSize.getHeight() - 15,
-                { align: 'center' }
-            );
-        }
-    });
-
-    doc.save('sitin_records.pdf');
-}
-
-function printTable() {
-    const rows   = getTableData();
-    const headers= rows[0];
-    const body   = rows.slice(1);
-    let html = `
-        <html><head><title>Print - Sit-in Records</title>
-        <style>
-            body { font-family: Arial, sans-serif; font-size: 11px; margin: 20px; }
-            h2   { color: #5c2b7a; margin-bottom: 4px; }
-            p    { color: #999; font-size: 10px; margin-bottom: 12px; }
-            table{ width:100%; border-collapse:collapse; }
-            th   { background:#5c2b7a; color:white; padding:6px 8px; text-align:left; font-size:10px; }
-            td   { padding:5px 8px; border-bottom:1px solid #eee; font-size:10px; }
-            tr:nth-child(even) td { background:#f8f4fc; }
-            @media print { body { margin:0; } }
-        </style></head><body>
-        <h2>CCS Sit-in Records</h2>
-        <p>University of Cebu &mdash; College of Computer Studies &mdash; Printed: ${new Date().toLocaleString()}</p>
-        <table><thead><tr>`;
-    headers.forEach(h => html += `<th>${h}</th>`);
-    html += '</tr></thead><tbody>';
-    body.forEach(row => {
-        html += '<tr>';
-        row.forEach(cell => html += `<td>${cell}</td>`);
-        html += '</tr>';
-    });
-    html += '</tbody></table></body></html>';
-    const win = window.open('', '_blank');
-    win.document.write(html);
-    win.document.close();
-    win.onload = () => { win.print(); win.close(); };
-}
+function toggleEdit(id){let el=document.getElementById('editLab_'+id); el.style.display=el.style.display==='none'?'block':'none';}
+function openEdit(id,f,l,c,v){document.getElementById('edit_id').value=id;document.getElementById('edit_first').value=f;document.getElementById('edit_last').value=l;document.getElementById('edit_course').value=c;document.getElementById('edit_level').value=v;new bootstrap.Modal(document.getElementById('editStudentModal')).show();}
+const search=document.getElementById('studentSearch'); if(search){search.oninput=function(){let q=this.value.toLowerCase();document.querySelectorAll('#studentTable tbody tr').forEach(tr=>tr.style.display=tr.innerText.toLowerCase().includes(q)?'':'none');};}
+const lookup=document.getElementById('studentLookup'); if(lookup){let db;lookup.oninput=function(){clearTimeout(db);const q=this.value.trim();if(q.length<2){document.getElementById('searchResults').style.display='none';return;}db=setTimeout(()=>{fetch('admin_dashboard.php?search_student='+encodeURIComponent(q)).then(r=>r.json()).then(data=>{const list=document.getElementById('resultsList');if(data.length===0)list.innerHTML='<div class="p-2 small">No matches.</div>';else list.innerHTML=data.map(s=>`<div class="p-3 rounded-4 bg-white border cursor-pointer" onclick="selectStudent('${s.IdNumber}','${s.FirstName}','${s.LastName}')"><div class="fw-800 text-gold">${s.FirstName} ${s.LastName}</div><div class="small text-dim">${s.IdNumber} • ${s.Course}</div></div>`).join('');document.getElementById('searchResults').style.display='block';});},300);};}
+function selectStudent(id,f,l){document.getElementById('sitin_id').value=id;document.getElementById('display_id').innerText=id;document.getElementById('display_name').innerText=f+' '+l;document.getElementById('searchResults').style.display='none';document.getElementById('studentLookup').value=f+' '+l;document.getElementById('sitinForm').style.display='block';}
+<?php if($active_tab==='dashboard'): ?>
+document.addEventListener('DOMContentLoaded',()=>{const ctx=document.getElementById('usageChart');if(ctx)new Chart(ctx,{type:'doughnut',data:{labels:<?=json_encode($purposes)?>,datasets:[{data:<?=json_encode($counts)?>,backgroundColor:['#5c2b7a','#c09412','#7b3da3','#d4a72c','#2D1B4E'],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,cutout:'75%',plugins:{legend:{position:'bottom',labels:{usePointStyle:true,font:{size:10}}}}}});});
+<?php endif; ?>
 </script>
-</body>
-</html>
+</body></html>
