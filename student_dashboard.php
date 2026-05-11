@@ -74,11 +74,16 @@ if (isset($_GET['get_pcs'])) {
     $dis_res->bind_param("s", $lab); $dis_res->execute(); $dis_rows = $dis_res->get_result()->fetch_all(MYSQLI_ASSOC); $dis_res->close();
     $disabled = [];
     foreach($dis_rows as $dr) $disabled[$dr['PCNumber']] = $dr['Reason'];
+
+    // Get Lab Resources
+    $res_q = $conn->prepare("SELECT AppName, Category, Description FROM lab_resources WHERE LabName=? ORDER BY Category, AppName");
+    $res_q->bind_param("s", $lab); $res_q->execute(); $res_rows = $res_q->get_result()->fetch_all(MYSQLI_ASSOC); $res_q->close();
     
     header('Content-Type: application/json');
     echo json_encode([
         'occupied' => $occupied, 
         'disabled' => $disabled, 
+        'resources' => $res_rows,
         'total' => $pcc
     ]);
     exit();
@@ -222,6 +227,7 @@ while($p_row = $purp_q->fetch_assoc()) {
         <a href="#" class="dock-link" data-bs-toggle="modal" data-bs-target="#resModal"><i class="fa-solid fa-calendar-check"></i><span>Reservation</span></a>
         <a href="#" class="dock-link" data-bs-toggle="modal" data-bs-target="#notifModal" onclick="markRead()"><i class="fa-solid fa-bell"></i><span>Alerts</span><?php if($unread_count>0): ?><div style="width:8px;height:8px;background:var(--gold);border-radius:50%;margin-left:auto;margin-right:15px;"></div><?php endif; ?></a>
         <a href="#" class="dock-link" data-bs-toggle="modal" data-bs-target="#histModal"><i class="fa-solid fa-history"></i><span>History</span></a>
+        <a href="#" class="dock-link" data-bs-toggle="modal" data-bs-target="#leaderboardModal"><i class="fa-solid fa-trophy"></i><span>Leaderboard</span></a>
         <a href="#" class="dock-link" data-bs-toggle="modal" data-bs-target="#editModal"><i class="fa-solid fa-user-gear"></i><span>Settings</span></a>
     </nav>
     <form method="POST" action="logout.php" class="w-100 px-2"><?php csrf_input(); ?><button class="dock-link border-0 bg-transparent w-100 text-danger"><i class="fa-solid fa-power-off"></i><span>Logout</span></button></form>
@@ -286,51 +292,35 @@ while($p_row = $purp_q->fetch_assoc()) {
                 </table>
             </div>
         </div>
-
-        <div class="bento-card tile-wide">
-            <div class="card-title">Available Lab Resources</div>
-            <div class="glass-table-container">
-                <div class="row g-3">
-                    <?php 
-                    $labs = $conn->query("SELECT DISTINCT LabName FROM lab_resources ORDER BY LabName");
-                    if($labs && $labs->num_rows > 0): 
-                        while($l = $labs->fetch_assoc()): 
-                            $lname = $l['LabName'];
-                    ?>
-                        <div class="col-md-4">
-                            <div class="p-3 rounded-4 bg-white border h-100 shadow-sm">
-                                <div class="fw-800 text-gold mb-2 border-bottom pb-1">Lab <?= $lname ?></div>
-                                <div class="d-flex flex-column gap-2">
-                                    <?php 
-                                    $apps = $conn->query("SELECT * FROM lab_resources WHERE LabName='$lname' ORDER BY Category, AppName");
-                                    while($app = $apps->fetch_assoc()): 
-                                    ?>
-                                        <div class="d-flex justify-content-between align-items-center">
-                                            <div>
-                                                <div class="fw-700" style="font-size: 0.9rem;"><?= $app['AppName'] ?></div>
-                                                <div class="text-dim" style="font-size: 0.75rem;"><?= $app['Category'] ?></div>
-                                            </div>
-                                            <?php if($app['Description']): ?>
-                                                <span class="badge bg-light text-dim fw-600" style="font-size: 0.65rem;"><?= $app['Description'] ?></span>
-                                            <?php endif; ?>
-                                        </div>
-                                    <?php endwhile; ?>
-                                </div>
-                            </div>
-                        </div>
-                    <?php endwhile; else: ?>
-                        <div class="col-12 text-center py-4 text-dim">No lab resources listed yet.</div>
-                    <?php endif; ?>
-                </div>
-            </div>
-        </div>
     </div>
 </main>
 
 <!-- MODALS -->
 <div class="modal fade" id="photoModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header"><h5 class="fw-800">Profile Photo</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body text-center"><div id="photoPreview" class="mb-4"></div><input type="file" id="photoUploadInput" class="d-none" onchange="uploadPhoto(this)"><button class="btn-action w-100 py-3 mb-2" onclick="document.getElementById('photoUploadInput').click()">Upload New Photo</button><button class="btn btn-link text-danger w-100" onclick="removePhoto()">Remove Photo</button></div></div></div></div>
 
-<div class="modal fade" id="resModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered modal-lg"><div class="modal-content"><div class="modal-header"><h5 class="fw-800">Lab Reservation</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><form method="POST"><?php csrf_input(); ?><div class="row g-3"><div class="col-md-6"><label class="small fw-800">Purpose</label><select name="res_purpose" class="form-select"><option>C Programming</option><option>Java Programming</option><option>Research</option></select></div><div class="col-md-6"><label class="small fw-800">Date</label><input type="date" name="res_date" class="form-control" min="<?= date('Y-m-d') ?>"></div><div class="col-12"><label class="small fw-800">Laboratory</label><div class="d-flex gap-2 flex-wrap"><?php $lbq=$conn->query("SELECT * FROM labs"); while($lb=$lbq->fetch_assoc()): ?><button type="button" class="lab-btn" data-lab="<?= $lb['LabName'] ?>" data-total="<?= $lb['PCCount'] ?>">Lab <?= $lb['LabName'] ?></button><?php endwhile; ?></div><input type="hidden" name="res_lab" id="res_lab_input" required><input type="hidden" name="res_pc" id="res_pc_input"></div><div id="pcPickerWrap" class="col-12 d-none"><div class="small fw-800 mb-2">Select PC Number</div><div id="pcGrid" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(50px,1fr)); gap:8px;"></div></div><div class="col-md-6"><label class="small fw-800">Time In</label><input type="time" name="res_timein" class="form-control"></div><button type="submit" name="submit_reservation" class="btn-action w-100 py-3 mt-3">REQUEST RESERVATION</button></div></form></div></div></div></div>
+<div class="modal fade" id="resModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered modal-lg"><div class="modal-content"><div class="modal-header"><h5 class="fw-800">Lab Reservation</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><form method="POST"><?php csrf_input(); ?><div class="row g-3"><div class="col-md-6"><label class="small fw-800">Purpose</label><select name="res_purpose" class="form-select"><option>C Programming</option><option>Java Programming</option><option>Research</option></select></div><div class="col-md-6"><label class="small fw-800">Date</label><input type="date" name="res_date" class="form-control" min="<?= date('Y-m-d') ?>"></div><div class="col-12"><label class="small fw-800">Laboratory</label><div class="d-flex gap-2 flex-wrap"><?php $lbq=$conn->query("SELECT * FROM labs"); while($lb=$lbq->fetch_assoc()): ?><button type="button" class="lab-btn" data-lab="<?= $lb['LabName'] ?>" data-total="<?= $lb['PCCount'] ?>">Lab <?= $lb['LabName'] ?></button><?php endwhile; ?></div><input type="hidden" name="res_lab" id="res_lab_input" required><input type="hidden" name="res_pc" id="res_pc_input"></div>
+
+<div id="labInfoArea" class="col-12 d-none">
+    <div class="row g-3">
+        <div class="col-md-7">
+            <div class="small fw-800 mb-2">Select PC Number</div>
+            <div id="pcGrid" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(50px,1fr)); gap:8px;"></div>
+        </div>
+        <div class="col-md-5">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <div class="small fw-800">Available Apps</div>
+                <?php if(file_exists('resources_docs/master_software_list.pdf')): ?>
+                    <a href="resources_docs/master_software_list.pdf" class="text-gold fw-800" style="font-size:0.7rem; text-decoration:none;" download><i class="fa fa-download me-1"></i>PDF</a>
+                <?php endif; ?>
+            </div>
+            <div id="appInfo" class="p-3 rounded-4 bg-white border" style="max-height: 250px; overflow-y: auto;">
+                <div class="text-dim small">Select a lab to see available apps.</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="col-md-6"><label class="small fw-800">Time In</label><input type="time" name="res_timein" class="form-control"></div><button type="submit" name="submit_reservation" class="btn-action w-100 py-3 mt-3">REQUEST RESERVATION</button></div></form></div></div></div></div>
 
 <div class="modal fade" id="feedbackModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header"><h5 class="fw-800">Rate Session</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><form method="POST"><?php csrf_input(); ?><input type="hidden" name="fb_session_id" id="fb_session_id"><div class="mb-3"><label class="small fw-800 mb-2">Task Completed?</label><select name="fb_task_completed" class="form-select"><option value="1">Fully</option><option value="0.5">Partially</option><option value="0">No</option></select></div><div class="mb-3"><label class="small fw-800">PC Rating (1-5)</label><input type="number" name="fb_rating" class="form-control" min="1" max="5"></div><textarea name="fb_message" class="form-control mb-3" placeholder="Comments..."></textarea><button type="submit" name="submit_feedback" class="btn-action w-100 py-3">SUBMIT</button></form></div></div></div></div>
 
@@ -439,33 +429,61 @@ while($p_row = $purp_q->fetch_assoc()) {
     </div>
 </div>
 
+<!-- Leaderboard Modal -->
+<div class="modal fade" id="leaderboardModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="fw-800">Top Performers</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-dim small mb-4 fw-600">Rankings based on dedicated lab hours and task completion efficiency.</p>
+                <div style="max-height: 60vh; overflow-y: auto;">
+                    <?php
+                    $leaderboard = getLeaderboardData($conn, 10);
+                    displayLeaderboard($leaderboard, false);
+                    ?>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 function openPhotoModal(){new bootstrap.Modal(document.getElementById('photoModal')).show();}
 function uploadPhoto(i){const fd=new FormData(); fd.append('photo',i.files[0]); fd.append('upload_photo','1'); fd.append('csrf_token','<?=get_csrf_token()?>'); fetch('',{method:'POST',body:fd}).then(()=>location.reload());}
 function removePhoto(){if(confirm('Delete?')) fetch('',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'remove_photo=1&csrf_token=<?=get_csrf_token()?>'}).then(()=>location.reload());}
-document.querySelectorAll('.lab-btn').forEach(b=>b.onclick=function(){document.querySelectorAll('.lab-btn').forEach(x=>x.classList.remove('active')); this.classList.add('active'); document.getElementById('res_lab_input').value=this.dataset.lab; document.getElementById('pcPickerWrap').classList.remove('d-none'); loadPCs(this.dataset.lab, document.querySelector('[name="res_date"]').value);});
+document.querySelectorAll('.lab-btn').forEach(b=>b.onclick=function(){
+    document.querySelectorAll('.lab-btn').forEach(x=>x.classList.remove('active')); 
+    this.classList.add('active'); 
+    document.getElementById('res_lab_input').value=this.dataset.lab; 
+    document.getElementById('labInfoArea').classList.remove('d-none'); 
+    loadPCs(this.dataset.lab, document.querySelector('[name="res_date"]').value);
+});
 function loadPCs(l,d){
     const g=document.getElementById('pcGrid'); 
+    const appBox = document.getElementById('appInfo');
     g.innerHTML='Loading...'; 
+    appBox.innerHTML='<div class="text-dim small">Fetching software list...</div>';
+    
     fetch(`?get_pcs=1&lab=${l}&date=${d}`).then(r=>r.json()).then(data=>{
         g.innerHTML=''; 
         const occupied = data.occupied || [];
         const disabled = data.disabled || {};
+        const resources = data.resources || [];
+        
+        // Render PCs
         for(let i=1;i<=data.total;i++){
             const div=document.createElement('div');
             const is_occupied = occupied.includes(i);
             const is_disabled = disabled.hasOwnProperty(i);
-            
             div.className = 'pc-item' + (is_occupied || is_disabled ? ' occupied' : '');
             div.innerText = i;
-            
-            if(is_disabled) {
-                div.title = 'Condition: ' + disabled[i];
-                div.style.cursor = 'help';
-            } else if(is_occupied) {
-                div.title = 'Status: Currently Booked';
-            } else {
+            if(is_disabled) { div.title = 'Condition: ' + disabled[i]; div.style.cursor = 'help'; } 
+            else if(is_occupied) { div.title = 'Status: Currently Booked'; } 
+            else {
                 div.onclick=function(){
                     g.querySelectorAll('.pc-item').forEach(p=>p.classList.remove('selected')); 
                     this.classList.add('selected'); 
@@ -473,6 +491,20 @@ function loadPCs(l,d){
                 };
             }
             g.appendChild(div);
+        }
+
+        // Render Apps
+        if(resources.length > 0) {
+            appBox.innerHTML = resources.map(app => `
+                <div class="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom">
+                    <div>
+                        <div class="fw-700" style="font-size: 0.85rem;">${app.AppName}</div>
+                        <div class="text-dim" style="font-size: 0.7rem;">${app.Category} ${app.Description ? '• '+app.Description : ''}</div>
+                    </div>
+                </div>
+            `).join('');
+        } else {
+            appBox.innerHTML = '<div class="text-dim small">No specific apps listed for this lab.</div>';
         }
     }); 
 }

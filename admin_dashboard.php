@@ -151,6 +151,22 @@ if (isset($_POST['delete_resource'])) {
     header("Location: admin_dashboard.php?tab=resources"); exit();
 }
 
+// Upload Resource PDF (Import)
+if (isset($_POST['upload_resource_pdf'])) {
+    if (isset($_FILES['resource_pdf']) && $_FILES['resource_pdf']['error'] == 0) {
+        $file = $_FILES['resource_pdf'];
+        $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+        if ($ext === 'pdf') {
+            $dest = 'resources_docs/master_software_list.pdf';
+            move_uploaded_file($file['tmp_name'], $dest);
+            header("Location: admin_dashboard.php?tab=resources&pdf=success");
+        } else {
+            header("Location: admin_dashboard.php?tab=resources&pdf=error");
+        }
+    }
+    exit();
+}
+
 // Toggle PC status (Disabled/Enabled)
 if (isset($_POST['toggle_pc_status'])) {
     $lab = $_POST['pc_lab'];
@@ -395,6 +411,7 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
         <a href="admin_dashboard.php?tab=reservations" class="dock-link <?= $active_tab==='reservations'?'active':'' ?>"><i class="fa-solid fa-calendar-check"></i><span>Reservations</span></a>
         <a href="admin_dashboard.php?tab=announcements" class="dock-link <?= $active_tab==='announcements'?'active':'' ?>"><i class="fa-solid fa-bullhorn"></i><span>Announcements</span></a>
         <a href="admin_dashboard.php?tab=records" class="dock-link <?= $active_tab==='records'?'active':'' ?>"><i class="fa-solid fa-history"></i><span>History</span></a>
+        <a href="admin_dashboard.php?tab=leaderboard" class="dock-link <?= $active_tab==='leaderboard'?'active':'' ?>"><i class="fa-solid fa-trophy"></i><span>Leaderboard</span></a>
         <a href="admin_dashboard.php?tab=labs" class="dock-link <?= $active_tab==='labs'?'active':'' ?>"><i class="fa-solid fa-flask"></i><span>Laboratories</span></a>
         <a href="admin_dashboard.php?tab=resources" class="dock-link <?= $active_tab==='resources'?'active':'' ?>"><i class="fa-solid fa-layer-group"></i><span>Resources</span></a>
     </nav>
@@ -652,6 +669,24 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
     <?php endif; ?>
 
     <?php elseif ($active_tab === 'resources'): ?>
+    <div class="row g-4 mb-4">
+        <div class="col-md-12">
+            <div class="bento-card">
+                <div class="card-title d-flex justify-content-between align-items-center">
+                    <span>Software Inventory Management</span>
+                    <div class="d-flex gap-2">
+                        <?php if(file_exists('resources_docs/master_software_list.pdf')): ?>
+                            <a href="resources_docs/master_software_list.pdf" class="btn btn-sm btn-outline-secondary fw-700" target="_blank"><i class="fa fa-file-pdf me-1"></i> Current Master List</a>
+                        <?php endif; ?>
+                        <button class="btn btn-sm btn-action" data-bs-toggle="modal" data-bs-target="#importPdfModal"><i class="fa fa-upload me-1"></i> Import PDF</button>
+                    </div>
+                </div>
+                <?php if(isset($_GET['pdf']) && $_GET['pdf']==='success'): ?>
+                    <div class="alert alert-success py-2 small fw-600 animate__animated animate__fadeIn">Master software list updated successfully.</div>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
     <div class="row g-4">
         <div class="col-md-4">
             <div class="bento-card">
@@ -767,6 +802,24 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
         <input type="hidden" name="res_id" id="approve_res_id">
         <input type="hidden" name="approve_reservation" value="1">
     </form>
+    <div class="modal fade" id="importPdfModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header"><h5 class="fw-800">Import Master Software List</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                <form method="POST" enctype="multipart/form-data">
+                    <?php csrf_input(); ?>
+                    <div class="modal-body">
+                        <div class="alert alert-info small fw-600 mb-3">Upload a PDF file containing the official software list. This will be available for all students to download.</div>
+                        <div class="mb-3">
+                            <label class="small fw-800">Select PDF File</label>
+                            <input type="file" name="resource_pdf" class="form-control" accept=".pdf" required>
+                        </div>
+                    </div>
+                    <div class="modal-footer border-0"><button type="submit" name="upload_resource_pdf" class="btn-action w-100 py-3">UPLOAD MASTER LIST</button></div>
+                </form>
+            </div>
+        </div>
+    </div>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
