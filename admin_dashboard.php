@@ -99,11 +99,75 @@ if (isset($_POST['edit_student'])) {
 
 // Delete student
 if (isset($_POST['delete_student'])) {
-    $sid = $_POST['del_id'];
-    $s = $conn->prepare("DELETE FROM students_info WHERE IdNumber = ? AND is_admin = 0");
+    $sid = $_POST['delete_id'];
+    $s = $conn->prepare("DELETE FROM students_info WHERE IdNumber = ?");
     $s->bind_param("s", $sid);
     $s->execute(); $s->close();
     header("Location: admin_dashboard.php?tab=students"); exit();
+}
+
+// Add student manually
+if (isset($_POST['add_student_manual'])) {
+    $sid   = trim($_POST['id_num']);
+    $fn    = trim($_POST['first_name']);
+    $ln    = trim($_POST['last_name']);
+    $em    = trim($_POST['email']);
+    $crs   = trim($_POST['course']);
+    $lvl   = (int)$_POST['level'];
+    $adr   = trim($_POST['address']);
+    $pwd   = password_hash($_POST['password'] ?: '123456', PASSWORD_DEFAULT);
+    
+    $chk = $conn->prepare("SELECT IdNumber FROM students_info WHERE IdNumber = ?");
+    $chk->bind_param("s", $sid); $chk->execute();
+    if ($chk->get_result()->num_rows > 0) {
+        header("Location: admin_dashboard.php?tab=students&error=exists");
+    } else {
+        $s = $conn->prepare("INSERT INTO students_info (IdNumber, FirstName, LastName, Email, Course, CourseLevel, Address, Password, is_admin) VALUES (?,?,?,?,?,?,?,?,0)");
+        $s->bind_param("sssssiss", $sid, $fn, $ln, $em, $crs, $lvl, $adr, $pwd);
+        $s->execute(); $s->close();
+        header("Location: admin_dashboard.php?tab=students&success=added");
+    }
+    exit();
+}
+
+// Add resource
+if (isset($_POST['add_resource'])) {
+    $lab = trim($_POST['res_lab']);
+    $app = trim($_POST['res_app']);
+    $cat = trim($_POST['res_cat']);
+    $desc = trim($_POST['res_desc']);
+    $s = $conn->prepare("INSERT INTO lab_resources (LabName, AppName, Category, Description) VALUES (?,?,?,?)");
+    $s->bind_param("ssss", $lab, $app, $cat, $desc);
+    $s->execute(); $s->close();
+    header("Location: admin_dashboard.php?tab=resources"); exit();
+}
+
+// Delete resource
+if (isset($_POST['delete_resource'])) {
+    $rid = (int)$_POST['res_id'];
+    $s = $conn->prepare("DELETE FROM lab_resources WHERE ResourceID = ?");
+    $s->bind_param("i", $rid);
+    $s->execute(); $s->close();
+    header("Location: admin_dashboard.php?tab=resources"); exit();
+}
+
+// Toggle PC status (Disabled/Enabled)
+if (isset($_POST['toggle_pc_status'])) {
+    $lab = $_POST['pc_lab'];
+    $pc = (int)$_POST['pc_num'];
+    $action = $_POST['pc_action']; // 'disable' or 'enable'
+    
+    if ($action === 'disable') {
+        $reason = trim($_POST['pc_reason'] ?? 'Under Maintenance');
+        $s = $conn->prepare("INSERT IGNORE INTO disabled_pcs (LabName, PCNumber, Reason) VALUES (?, ?, ?)");
+        $s->bind_param("sis", $lab, $pc, $reason);
+        $s->execute(); $s->close();
+    } else {
+        $s = $conn->prepare("DELETE FROM disabled_pcs WHERE LabName=? AND PCNumber=?");
+        $s->bind_param("si", $lab, $pc);
+        $s->execute(); $s->close();
+    }
+    header("Location: admin_dashboard.php?tab=labs&managed_lab=" . urlencode($lab)); exit();
 }
 
 // Logout student session
@@ -172,16 +236,20 @@ if (isset($_POST['approve_reservation'])) {
 // Reject reservation
 if (isset($_POST['reject_reservation'])) {
     $rid = (int)$_POST['res_id'];
+    $reason = trim($_POST['cancel_reason'] ?? 'Your reservation has been rejected/cancelled by the admin.');
+    
     $r_stmt = $conn->prepare("SELECT StudentID, SessionDate, Lab, Purpose FROM sit_in_sessions WHERE SessionID=? AND Type='Reservation'");
     $r_stmt->bind_param("i", $rid);
     $r_stmt->execute();
     $r_row = $r_stmt->get_result()->fetch_assoc();
     $r_stmt->close();
+    
     if ($r_row) {
         $s = $conn->prepare("UPDATE sit_in_sessions SET Status='Cancelled' WHERE SessionID=? AND Type='Reservation'");
         $s->bind_param("i", $rid);
         $s->execute(); $s->close();
-        $msg = "Your reservation for " . $r_row['Purpose'] . " at Lab " . $r_row['Lab'] . " on " . $r_row['SessionDate'] . " has been rejected.";
+        
+        $msg = "Reservation Update: " . $reason . " (Lab " . $r_row['Lab'] . " on " . $r_row['SessionDate'] . ")";
         $n = $conn->prepare("INSERT INTO notifications (StudentID, Message) VALUES (?,?)");
         $n->bind_param("ss", $r_row['StudentID'], $msg);
         $n->execute(); $n->close();
@@ -328,6 +396,7 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
         <a href="admin_dashboard.php?tab=announcements" class="dock-link <?= $active_tab==='announcements'?'active':'' ?>"><i class="fa-solid fa-bullhorn"></i><span>Announcements</span></a>
         <a href="admin_dashboard.php?tab=records" class="dock-link <?= $active_tab==='records'?'active':'' ?>"><i class="fa-solid fa-history"></i><span>History</span></a>
         <a href="admin_dashboard.php?tab=labs" class="dock-link <?= $active_tab==='labs'?'active':'' ?>"><i class="fa-solid fa-flask"></i><span>Laboratories</span></a>
+        <a href="admin_dashboard.php?tab=resources" class="dock-link <?= $active_tab==='resources'?'active':'' ?>"><i class="fa-solid fa-layer-group"></i><span>Resources</span></a>
     </nav>
     <form method="POST" action="logout.php" class="w-100 px-2"><?php csrf_input(); ?><button class="dock-link border-0 bg-transparent w-100 text-danger"><i class="fa-solid fa-power-off"></i><span>Logout</span></button></form>
 </aside>
@@ -338,7 +407,7 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
             <div class="vital-label mb-1">ADMIN ACCOUNT</div>
             <h1>
                 <?php
-                $titles = ['dashboard'=>'Overview','students'=>'Student List','sitin'=>'Live Monitor','sitinform'=>'Add Sit-in','reservations'=>'Reservations','announcements'=>'Announcements','records'=>'History','labs'=>'Labs'];
+                $titles = ['dashboard'=>'Overview','students'=>'Student List','sitin'=>'Live Monitor','sitinform'=>'Add Sit-in','reservations'=>'Reservations','announcements'=>'Announcements','records'=>'History','labs'=>'Labs','resources'=>'Lab Resources'];
                 echo $titles[$active_tab] ?? 'Dashboard';
                 ?>
             </h1>
@@ -391,7 +460,21 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
 
     <?php elseif ($active_tab === 'students'): ?>
     <div class="bento-card tile-wide">
-        <div class="card-title d-flex justify-content-between"><span>Student List</span><input type="text" id="studentSearch" class="search-bar w-25" placeholder="Search..."></div>
+        <div class="card-title d-flex justify-content-between">
+            <span>Student List</span>
+            <div class="d-flex gap-2 w-50 justify-content-end">
+                <input type="text" id="studentSearch" class="search-bar" placeholder="Search students..." style="max-width: 250px;">
+                <button class="btn-action" data-bs-toggle="modal" data-bs-target="#addStudentManualModal"><i class="fa fa-plus me-1"></i> Add Student</button>
+            </div>
+        </div>
+        
+        <?php if(isset($_GET['success'])): ?>
+            <div class="alert alert-success py-2 small fw-600 animate__animated animate__fadeIn">Student successfully added to the system.</div>
+        <?php endif; ?>
+        <?php if(isset($_GET['error'])): ?>
+            <div class="alert alert-danger py-2 small fw-600 animate__animated animate__fadeIn">Error: ID Number already exists in the system.</div>
+        <?php endif; ?>
+
         <div class="glass-table-container">
             <table class="glass-table" id="studentTable">
                 <thead><tr><th>Student</th><th>Course</th><th>Logs</th><th>Progress</th><th class="text-end">Action</th></tr></thead>
@@ -433,7 +516,20 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                 <tbody>
                     <?php $rv=$conn->query("SELECT s.*, st.FirstName, st.LastName FROM sit_in_sessions s JOIN students_info st ON s.StudentID=st.IdNumber WHERE s.Type='Reservation' ORDER BY SessionDate ASC");
                     while($r=$rv->fetch_assoc()): $st=strtolower($r['Status']); ?>
-                    <tr><td><?= $r['SessionDate'] ?></td><td><?= $r['FirstName'].' '.$r['LastName'] ?></td><td>Lab <?= $r['Lab'] ?> • PC <?= $r['PCNumber']?:'Any' ?></td><td><span class="status-badge <?= $st==='pending'?'bg-warning text-dark':'bg-primary text-white' ?>"><?= $r['Status'] ?></span></td><td class="text-end"><?php if($st==='pending'): ?><form method="POST" class="d-inline"><?php csrf_input(); ?><input type="hidden" name="res_id" value="<?= $r['SessionID'] ?>"><button name="approve_reservation" class="btn-action py-1 px-2 me-1">Approve</button><button name="reject_reservation" class="btn-action bg-danger py-1 px-2">Reject</button></form><?php endif; ?></td></tr>
+                    <tr>
+                        <td><?= $r['SessionDate'] ?></td>
+                        <td><?= $r['FirstName'].' '.$r['LastName'] ?></td>
+                        <td>Lab <?= $r['Lab'] ?> • PC <?= $r['PCNumber']?:'Any' ?></td>
+                        <td><span class="status-badge <?= ($st==='pending'?'bg-warning text-dark':($st==='approved'?'bg-success text-white':'bg-secondary text-white')) ?>"><?= $r['Status'] ?></span></td>
+                        <td class="text-end">
+                            <?php if($st==='pending'): ?>
+                                <button class="btn-action py-1 px-2 me-1 bg-success" onclick="approveRes(<?= $r['SessionID'] ?>)">Approve</button>
+                                <button class="btn-action bg-danger py-1 px-2" onclick="openReject(<?= $r['SessionID'] ?>)">Reject</button>
+                            <?php elseif($st==='approved'): ?>
+                                <button class="btn-action bg-danger py-1 px-2" onclick="openReject(<?= $r['SessionID'] ?>)">Cancel Approval</button>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
                     <?php endwhile; ?>
                 </tbody>
             </table>
@@ -444,7 +540,14 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
 
     <?php elseif ($active_tab === 'records'): ?>
     <div class="bento-card tile-wide">
-        <div class="card-title">Sit-in History</div>
+        <div class="card-title d-flex justify-content-between align-items-center">
+            <span>Sit-in History</span>
+            <div class="d-flex gap-2">
+                <a href="export.php?type=csv" class="btn btn-sm btn-outline-secondary fw-700" target="_blank"><i class="fa fa-file-csv me-1"></i> CSV</a>
+                <a href="export.php?type=xls" class="btn btn-sm btn-outline-secondary fw-700" target="_blank"><i class="fa fa-file-excel me-1"></i> Excel</a>
+                <a href="export.php?type=pdf" class="btn btn-sm btn-outline-secondary fw-700" target="_blank"><i class="fa fa-file-pdf me-1"></i> PDF</a>
+            </div>
+        </div>
         <div class="glass-table-container">
             <table class="glass-table">
                 <thead><tr><th>Date</th><th>Student</th><th>Lab & PC</th><th>Purpose</th><th>Time Range</th><th>Status</th></tr></thead>
@@ -458,26 +561,228 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
     </div>
 
     <?php elseif ($active_tab === 'labs'): ?>
-    <div class="bento-card tile-wide">
+    <div class="bento-card tile-wide mb-4">
         <div class="card-title d-flex justify-content-between"><span>Laboratory Management</span><button class="btn-action" data-bs-toggle="modal" data-bs-target="#addLabModal">Add New Lab</button></div>
         <div class="glass-table-container">
             <table class="glass-table">
-                <thead><tr><th>Lab Name</th><th>PCs</th><th>Location / Notes</th><th class="text-end">Action</th></tr></thead>
+                <thead><tr><th>Lab Name</th><th>Total PCs</th><th>Location / Notes</th><th class="text-end">Action</th></tr></thead>
                 <tbody>
                     <?php $lb=$conn->query("SELECT * FROM labs ORDER BY LabName"); while($l=$lb->fetch_assoc()): ?>
-                    <tr><td><strong>Lab <?= $l['LabName'] ?></strong></td><td><?= $l['PCCount'] ?></td><td><?= $l['Description'] ?></td><td class="text-end"><button class="btn-action py-1 px-3" onclick="toggleEdit(<?= $l['LabID'] ?>)">Edit</button><form method="POST" class="d-inline"><?php csrf_input(); ?><input type="hidden" name="lab_id" value="<?= $l['LabID'] ?>"><button name="delete_lab" class="btn text-danger ms-2"><i class="fa fa-trash"></i></button></form><div id="editLab_<?= $l['LabID'] ?>" style="display:none;" class="mt-2 text-start p-3 bg-white rounded-4 border"><form method="POST"><?php csrf_input(); ?><input type="hidden" name="lab_id" value="<?= $l['LabID'] ?>"><div class="row g-2"><div class="col-8"><input type="text" name="lab_name" class="form-control" value="<?= $l['LabName'] ?>"></div><div class="col-4"><input type="number" name="pc_count" class="form-control" value="<?= $l['PCCount'] ?>"></div><div class="col-12"><textarea name="lab_desc" class="form-control mt-1"><?= $l['Description'] ?></textarea></div><button type="submit" name="update_lab" class="btn-action w-100 mt-2">Save</button></div></form></div></td></tr>
+                    <tr>
+                        <td><strong>Lab <?= $l['LabName'] ?></strong></td>
+                        <td><?= $l['PCCount'] ?></td>
+                        <td><?= $l['Description'] ?></td>
+                        <td class="text-end">
+                            <a href="admin_dashboard.php?tab=labs&manage_lab=<?= urlencode($l['LabName']) ?>&pcs=<?= $l['PCCount'] ?>" class="btn-action py-1 px-3 me-2" style="text-decoration:none;">Manage PCs</a>
+                            <button class="btn-action py-1 px-3" onclick="toggleEdit(<?= $l['LabID'] ?>)">Edit</button>
+                            <form method="POST" class="d-inline"><?php csrf_input(); ?><input type="hidden" name="lab_id" value="<?= $l['LabID'] ?>"><button name="delete_lab" class="btn text-danger ms-2"><i class="fa fa-trash"></i></button></form>
+                            <div id="editLab_<?= $l['LabID'] ?>" style="display:none;" class="mt-2 text-start p-3 bg-white rounded-4 border">
+                                <form method="POST"><?php csrf_input(); ?><input type="hidden" name="lab_id" value="<?= $l['LabID'] ?>"><div class="row g-2"><div class="col-8"><input type="text" name="lab_name" class="form-control" value="<?= $l['LabName'] ?>"></div><div class="col-4"><input type="number" name="pc_count" class="form-control" value="<?= $l['PCCount'] ?>"></div><div class="col-12"><textarea name="lab_desc" class="form-control mt-1"><?= $l['Description'] ?></textarea></div><button type="submit" name="update_lab" class="btn-action w-100 mt-2">Save</button></div></form>
+                            </div>
+                        </td>
+                    </tr>
                     <?php endwhile; ?>
                 </tbody>
             </table>
+        </div>
+    </div>
+
+    <?php if (isset($_GET['manage_lab'])): 
+        $mlab = $_GET['manage_lab'];
+        $mcount = (int)$_GET['pcs'];
+        $dis = []; $res = $conn->query("SELECT PCNumber, Reason FROM disabled_pcs WHERE LabName='$mlab'");
+        while($d=$res->fetch_assoc()) $dis[$d['PCNumber']] = $d['Reason'];
+    ?>
+    <div class="bento-card tile-wide">
+        <div class="card-title d-flex justify-content-between">
+            <span>Managing PCs for Lab <?= htmlspecialchars($mlab) ?></span>
+            <a href="admin_dashboard.php?tab=labs" class="btn btn-sm btn-outline-secondary">Close</a>
+        </div>
+        <div class="alert alert-info py-2 small fw-600">Click any computer card to toggle its availability. Disabled PCs will be hidden from students.</div>
+        <div class="d-flex flex-wrap gap-3">
+            <?php for($i=1; $i<=$mcount; $i++): $is_dis = isset($dis[$i]); ?>
+                <div class="pc-status-card <?= $is_dis?'disabled':'available' ?>" onclick="togglePC('<?= $mlab ?>', <?= $i ?>, '<?= $is_dis?'enable':'disable' ?>')">
+                    <div class="pc-card-icon">
+                        <i class="fa fa-desktop"></i>
+                    </div>
+                    <div class="pc-card-info">
+                        <div class="pc-card-num">PC <?= str_pad($i, 2, '0', STR_PAD_LEFT) ?></div>
+                        <div class="pc-card-status-badge"><?= $is_dis?'OFF':'ON' ?></div>
+                    </div>
+                    <?php if($is_dis): ?>
+                        <div class="pc-card-reason" title="<?= htmlspecialchars($dis[$i]) ?>"><?= htmlspecialchars($dis[$i]) ?></div>
+                    <?php endif; ?>
+                </div>
+            <?php endfor; ?>
+        </div>
+    </div>
+    
+    <div class="modal fade" id="pcToggleModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered modal-sm"><div class="modal-content"><div class="modal-header py-3"><h6 class="mb-0 fw-800" id="pcModalTitle">Disable PC</h6><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><form method="POST"><?php csrf_input(); ?><input type="hidden" name="pc_lab" id="modal_pc_lab"><input type="hidden" name="pc_num" id="modal_pc_num"><input type="hidden" name="pc_action" id="modal_pc_action"><div class="modal-body py-3"><div id="disableOptions"><label class="small fw-800 mb-1">Reason for disabling</label><input type="text" name="pc_reason" class="form-control form-control-sm" value="Under Maintenance" required></div><div id="enableText" class="fw-600 small text-center">Are you sure you want to enable this PC?</div><button type="submit" name="toggle_pc_status" class="btn-action w-100 mt-3 py-2" id="pcModalBtn">Confirm</button></div></form></div></div></div>
+    <script>
+    function togglePC(lab, num, action) {
+        document.getElementById('modal_pc_lab').value = lab;
+        document.getElementById('modal_pc_num').value = num;
+        document.getElementById('modal_pc_action').value = action;
+        document.getElementById('pcModalTitle').innerText = (action === 'disable' ? 'Disable' : 'Enable') + ' PC #' + num;
+        document.getElementById('pcModalBtn').className = 'btn-action w-100 mt-3 py-2 ' + (action === 'disable' ? 'bg-danger' : 'bg-success');
+        document.getElementById('disableOptions').style.display = action === 'disable' ? 'block' : 'none';
+        document.getElementById('enableText').style.display = action === 'enable' ? 'block' : 'none';
+        new bootstrap.Modal(document.getElementById('pcToggleModal')).show();
+    }
+    </script>
+    <style>
+        .pc-status-card {
+            width: 120px; background: white; border-radius: 20px; padding: 15px; text-align: center;
+            cursor: pointer; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); border: 1px solid rgba(0,0,0,0.05);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.03); display: flex; flex-direction: column; align-items: center; gap: 10px;
+        }
+        .pc-status-card:hover { transform: translateY(-5px); box-shadow: 0 12px 24px rgba(92, 43, 122, 0.12); border-color: var(--primary-purple); }
+        
+        .pc-card-icon { width: 45px; height: 45px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; }
+        .pc-status-card.available .pc-card-icon { background: #e3fcef; color: #00a854; }
+        .pc-status-card.disabled .pc-card-icon { background: #fee2e2; color: #b91c1c; }
+        
+        .pc-card-num { font-weight: 800; font-size: 0.9rem; color: var(--text-main); margin-bottom: 2px; }
+        .pc-card-status-badge { font-size: 0.6rem; font-weight: 900; text-transform: uppercase; padding: 2px 8px; border-radius: 100px; }
+        .pc-status-card.available .pc-card-status-badge { background: #e3fcef; color: #00a854; }
+        .pc-status-card.disabled .pc-card-status-badge { background: #fee2e2; color: #b91c1c; }
+        
+        .pc-card-reason { font-size: 0.6rem; color: var(--text-dim); font-weight: 600; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    </style>
+    <?php endif; ?>
+
+    <?php elseif ($active_tab === 'resources'): ?>
+    <div class="row g-4">
+        <div class="col-md-4">
+            <div class="bento-card">
+                <div class="card-title">Add Lab Resource</div>
+                <form method="POST">
+                    <?php csrf_input(); ?>
+                    <div class="mb-3">
+                        <label class="small fw-800">Target Lab</label>
+                        <select name="res_lab" class="form-select" required>
+                            <?php $lb=$conn->query("SELECT LabName FROM labs ORDER BY LabName"); while($l=$lb->fetch_assoc()) echo "<option>".$l['LabName']."</option>"; ?>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="small fw-800">App/Software Name</label>
+                        <input type="text" name="res_app" class="form-control" placeholder="e.g. Visual Studio Code" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="small fw-800">Category</label>
+                        <select name="res_cat" class="form-select">
+                            <option>IDE / Editor</option>
+                            <option>Compiler / Runtime</option>
+                            <option>Database</option>
+                            <option>Design / Graphics</option>
+                            <option>Office / Productivity</option>
+                            <option>Browser</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="small fw-800">Version / Details (Optional)</label>
+                        <input type="text" name="res_desc" class="form-control" placeholder="e.g. v1.82">
+                    </div>
+                    <button type="submit" name="add_resource" class="btn-action w-100 py-3">ADD RESOURCE</button>
+                </form>
+            </div>
+        </div>
+        <div class="col-md-8">
+            <div class="bento-card h-100">
+                <div class="card-title">Installed Applications</div>
+                <div class="glass-table-container">
+                    <table class="glass-table">
+                        <thead><tr><th>App Name</th><th>Lab</th><th>Category</th><th class="text-end">Action</th></tr></thead>
+                        <tbody>
+                            <?php $res=$conn->query("SELECT * FROM lab_resources ORDER BY LabName, AppName"); 
+                            if($res && $res->num_rows > 0): while($r=$res->fetch_assoc()): ?>
+                            <tr>
+                                <td><strong><?= $r['AppName'] ?></strong><div class="small text-dim"><?= $r['Description'] ?></div></td>
+                                <td><span class="badge bg-light text-dark">Lab <?= $r['LabName'] ?></span></td>
+                                <td><?= $r['Category'] ?></td>
+                                <td class="text-end">
+                                    <form method="POST"><?php csrf_input(); ?><input type="hidden" name="res_id" value="<?= $r['ResourceID'] ?>"><button name="delete_resource" class="btn text-danger"><i class="fa fa-trash"></i></button></form>
+                                </td>
+                            </tr>
+                            <?php endwhile; else: echo "<tr><td colspan='4' class='text-center py-4 text-dim'>No resources added yet.</td></tr>"; endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     </div>
     <?php endif; ?>
 
     <div class="modal fade" id="editStudentModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header"><h5 class="fw-800">Edit Student Profile</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><form method="POST"><?php csrf_input(); ?><div class="modal-body"><input type="hidden" name="edit_id" id="edit_id"><div class="row g-3"><div class="col-6"><label class="small fw-800">First Name</label><input type="text" name="edit_first" id="edit_first" class="form-control"></div><div class="col-6"><label class="small fw-800">Last Name</label><input type="text" name="edit_last" id="edit_last" class="form-control"></div><div class="col-8"><label class="small fw-800">Course</label><input type="text" name="edit_course" id="edit_course" class="form-control"></div><div class="col-4"><label class="small fw-800">Year</label><input type="number" name="edit_level" id="edit_level" class="form-control"></div></div></div><div class="modal-footer border-0"><button type="submit" name="edit_student" class="btn-action w-100 py-3">Save Changes</button></div></form></div></div></div>
     <div class="modal fade" id="addLabModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header"><h5 class="fw-800">Add New Lab</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><form method="POST"><?php csrf_input(); ?><div class="modal-body"><div class="mb-2"><label class="small fw-800">Lab Name</label><input type="text" name="lab_name" class="form-control"></div><div class="mb-2"><label class="small fw-800">Total PCs</label><input type="number" name="lab_count" class="form-control"></div><div class="mb-2"><label class="small fw-800">Notes</label><textarea name="lab_desc_new" class="form-control"></textarea></div></div><div class="modal-footer border-0"><button type="submit" name="add_lab" class="btn-action w-100 py-3">Save Laboratory</button></div></form></div></div></div>
+
+    <div class="modal fade" id="addStudentManualModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header"><h5 class="fw-800">Manually Add Student</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                <form method="POST">
+                    <?php csrf_input(); ?>
+                    <div class="modal-body">
+                        <div class="row g-3">
+                            <div class="col-12"><label class="small fw-800">ID Number</label><input type="text" name="id_num" class="form-control" placeholder="e.g. 21102345" required></div>
+                            <div class="col-6"><label class="small fw-800">First Name</label><input type="text" name="first_name" class="form-control" required></div>
+                            <div class="col-6"><label class="small fw-800">Last Name</label><input type="text" name="last_name" class="form-control" required></div>
+                            <div class="col-12"><label class="small fw-800">Email Address</label><input type="email" name="email" class="form-control" required></div>
+                            <div class="col-8"><label class="small fw-800">Course</label><input type="text" name="course" class="form-control" placeholder="e.g. BSIT" required></div>
+                            <div class="col-4"><label class="small fw-800">Year Level</label><input type="number" name="level" class="form-control" min="1" max="5" value="1" required></div>
+                            <div class="col-12"><label class="small fw-800">Home Address</label><input type="text" name="address" class="form-control"></div>
+                            <div class="col-12"><label class="small fw-800">Default Password (Optional)</label><input type="password" name="password" class="form-control" placeholder="Default: 123456"></div>
+                        </div>
+                    </div>
+                    <div class="modal-footer border-0"><button type="submit" name="add_student_manual" class="btn-action w-100 py-3">REGISTER STUDENT</button></div>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="modal fade" id="rejectModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered modal-sm">
+            <div class="modal-content">
+                <div class="modal-header py-3"><h6 class="mb-0 fw-800">Reason for Cancellation</h6><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                <form method="POST">
+                    <?php csrf_input(); ?>
+                    <input type="hidden" name="res_id" id="reject_res_id">
+                    <div class="modal-body py-3">
+                        <select name="cancel_reason" class="form-select mb-3" required>
+                            <option value="Lab is currently unavailable due to class.">Lab unavailable (Class)</option>
+                            <option value="The lab is under maintenance.">Under Maintenance</option>
+                            <option value="Maximum lab capacity reached.">Lab at Full Capacity</option>
+                            <option value="Invalid reservation details.">Invalid Details</option>
+                            <option value="Other">Other (Manual input below)</option>
+                        </select>
+                        <textarea name="cancel_reason_manual" class="form-control" placeholder="Type custom reason here..." rows="2"></textarea>
+                        <button type="submit" name="reject_reservation" class="btn-action bg-danger w-100 mt-3 py-2">Confirm Cancellation</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <form id="approveForm" method="POST" style="display:none;">
+        <?php csrf_input(); ?>
+        <input type="hidden" name="res_id" id="approve_res_id">
+        <input type="hidden" name="approve_reservation" value="1">
+    </form>
 </main>
 
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
+function togglePC(lab, num, action) {
+    document.getElementById('modal_pc_lab').value = lab;
+    document.getElementById('modal_pc_num').value = num;
+    document.getElementById('modal_pc_action').value = action;
+    document.getElementById('pcModalTitle').innerText = (action === 'disable' ? 'Disable' : 'Enable') + ' PC #' + num;
+    document.getElementById('pcModalBtn').className = 'btn-action w-100 mt-3 py-2 ' + (action === 'disable' ? 'bg-danger' : 'bg-success');
+    document.getElementById('disableOptions').style.display = action === 'disable' ? 'block' : 'none';
+    document.getElementById('enableText').style.display = action === 'enable' ? 'block' : 'none';
+    new bootstrap.Modal(document.getElementById('pcToggleModal')).show();
+}
+function openReject(id){ document.getElementById('reject_res_id').value=id; new bootstrap.Modal(document.getElementById('rejectModal')).show(); }
+function approveRes(id){ document.getElementById('approve_res_id').value=id; document.getElementById('approveForm').submit(); }
 function toggleEdit(id){let el=document.getElementById('editLab_'+id); el.style.display=el.style.display==='none'?'block':'none';}
 function openEdit(id,f,l,c,v){document.getElementById('edit_id').value=id;document.getElementById('edit_first').value=f;document.getElementById('edit_last').value=l;document.getElementById('edit_course').value=c;document.getElementById('edit_level').value=v;new bootstrap.Modal(document.getElementById('editStudentModal')).show();}
 const search=document.getElementById('studentSearch'); if(search){search.oninput=function(){let q=this.value.toLowerCase();document.querySelectorAll('#studentTable tbody tr').forEach(tr=>tr.style.display=tr.innerText.toLowerCase().includes(q)?'':'none');};}
