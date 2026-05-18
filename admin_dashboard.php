@@ -803,7 +803,7 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                     <div class="mb-3">
                         <label class="small fw-800">Version / Details (Optional)</label>
                         <input type="text" name="res_desc" class="form-control" placeholder="e.g. v1.82">
-                    </div>
+                    </div>  
                     <button type="submit" name="add_resource" class="btn-action w-100 py-3">ADD RESOURCE</button>
                 </form>
             </div>

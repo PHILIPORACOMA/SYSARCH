@@ -1,8 +1,6 @@
 <?php
 session_start();
 
-$login_success = isset($_SESSION['login_success']) && $_SESSION['login_success'];
-
 include "db.php";
 
 // Check for session expiration message
@@ -12,12 +10,13 @@ if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] == "POST") {
     if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
         $error = "CSRF token validation failed. Please refresh and try again.";
     } else {
-        $email    = $_POST['email'];
+        $login_id = trim($_POST['id_number']);
         $password = $_POST['password'];
 
-        $sql  = "SELECT IdNumber, Password, FirstName, LastName, is_admin FROM students_info WHERE Email = ?";
+        // Use IdNumber as the identifier (can be Student ID or Admin Username)
+        $sql  = "SELECT IdNumber, Password, FirstName, LastName, is_admin FROM students_info WHERE IdNumber = ?";
         $stmt = $conn->prepare($sql);
-        $stmt->bind_param("s", $email);
+        $stmt->bind_param("s", $login_id);
         $stmt->execute();
         $user = $stmt->get_result()->fetch_assoc();
         $stmt->close();
@@ -28,14 +27,14 @@ if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] == "POST") {
             $_SESSION['user_name']     = $user['FirstName'] . ' ' . $user['LastName'];
             $_SESSION['is_admin']      = (int)$user['is_admin'];
             $_SESSION['login_success'] = true;
-            $_SESSION['login_time']    = time(); // Session start time
-            $_SESSION['last_activity'] = time(); // Last activity time
-            // Redirect admin to admin dashboard
+            $_SESSION['login_time']    = time(); 
+            $_SESSION['last_activity'] = time(); 
+            
             $redirect = (!empty($user['is_admin'])) ? "admin_dashboard.php" : "student_dashboard.php";
             header("Location: " . $redirect);
             exit();
         } else {
-            $error = "Invalid email or password.";
+            $error = "Invalid Student ID / Username or password.";
         }
     }
 }
@@ -83,7 +82,6 @@ if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] == "POST") {
             transition: all 0.2s; 
         }
         .nav-link:hover { background-color: rgba(255,255,255,0.1) !important; color: #f0d080 !important; }
-        .nav-link.active { background-color: rgba(255,255,255,0.15) !important; }
         .UC-Logo { height: 40px; }
 
         /* ── Login Card ── */
@@ -109,12 +107,12 @@ if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] == "POST") {
 
         .login-side-content {
             padding: 50px;
-            width: 50%;
+            width: 55%;
         }
 
         .login-side-logo {
             background: linear-gradient(135deg, var(--purple) 0%, var(--purple-light) 100%);
-            width: 50%;
+            width: 45%;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -147,7 +145,7 @@ if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] == "POST") {
         .form-control {
             border-radius: 12px;
             padding: 12px 16px;
-            border: 1.5px solid #eee;
+            border: 2px solid #eee;
             font-size: 0.95rem;
             transition: all 0.2s;
         }
@@ -176,48 +174,9 @@ if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] == "POST") {
             color: white;
         }
 
-        .divider {
-            display: flex;
-            align-items: center;
-            text-align: center;
-            margin: 25px 0;
-            color: #ccc;
-        }
-        .divider::before, .divider::after {
-            content: '';
-            flex: 1;
-            border-bottom: 1px solid #eee;
-        }
-        .divider span { padding: 0 15px; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; }
-
-        .social-login {
-            display: flex;
-            gap: 15px;
-            justify-content: center;
-        }
-        .btn-social {
-            width: 100%;
-            padding: 10px;
-            border: 1.5px solid #eee;
-            border-radius: 12px;
-            background: white;
-            color: var(--dark);
-            font-weight: 600;
-            font-size: 0.9rem;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            transition: all 0.2s;
-        }
-        .btn-social:hover {
-            border-color: var(--purple-soft);
-            background: var(--purple-soft);
-        }
-
         @media (max-width: 768px) {
-            .login-card { flex-direction: column; }
-            .login-side-content, .login-side-logo { width: 100%; padding: 30px; }
+            .login-card { flex-direction: column; max-width: 500px; }
+            .login-side-content, .login-side-logo { width: 100%; padding: 40px; }
             .login-side-logo { order: -1; }
         }
     </style>
@@ -243,14 +202,8 @@ if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] == "POST") {
         <div class="login-card">
             <!-- Left Side: Form -->
             <div class="login-side-content">
-                <h2 style="font-weight: 800; color: var(--purple); margin-bottom: 10px;">Login</h2>
-                <p style="color: var(--gray); margin-bottom: 30px; font-weight: 500;">Welcome back! Please enter your details.</p>
-
-                <?php if ($session_expired): ?>
-                    <div class="alert alert-warning border-0 shadow-sm mb-4" style="border-radius:12px; font-size:0.85rem;">
-                        <i class="fa fa-clock me-2"></i>Session expired. Please log in again.
-                    </div>
-                <?php endif; ?>
+                <h2 style="font-weight: 800; color: var(--purple); margin-bottom: 5px;">Welcome Back</h2>
+                <p style="color: var(--gray); margin-bottom: 30px; font-weight: 500;">Please log in using your student credentials.</p>
 
                 <?php if (isset($error)): ?>
                     <div class="alert alert-danger border-0 shadow-sm mb-4" style="border-radius:12px; font-size:0.85rem;">
@@ -258,41 +211,28 @@ if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] == "POST") {
                     </div>
                 <?php endif; ?>
 
+                <?php if ($session_expired): ?>
+                    <div class="alert alert-warning border-0 shadow-sm mb-4" style="border-radius:12px; font-size:0.85rem;">
+                        <i class="fa fa-clock me-2"></i>Your session has expired. Please login again.
+                    </div>
+                <?php endif; ?>
+
                 <form action="" method="POST">
                     <?php csrf_input(); ?>
                     <div class="mb-3">
-                        <label class="form-label">Email</label>
-                        <input type="email" name="email" class="form-control" placeholder="Enter your email" required autofocus>
+                        <label class="form-label">Student ID or Username</label>
+                        <input type="text" name="id_number" class="form-control" placeholder="e.g. 21234567" required autofocus>
                     </div>
-                    <div class="mb-3">
+                    <div class="mb-4">
                         <label class="form-label">Password</label>
                         <input type="password" name="password" class="form-control" placeholder="••••••••" required>
                     </div>
-                    
-                    <div class="d-flex justify-content-between align-items-center mb-4">
-                        <div class="form-check">
-                            <input type="checkbox" class="form-check-input" id="remember">
-                            <label class="form-check-label" for="remember" style="font-size: 0.85rem; color: var(--gray);">Remember me</label>
-                        </div>
-                        <a href="#" style="font-size: 0.85rem; color: var(--purple); font-weight: 600; text-decoration: none;">Forgot password?</a>
-                    </div>
-
                     <button type="submit" class="btn btn-login">
                         Log In
                     </button>
                 </form>
 
-                <div class="divider">
-                    <span>or</span>
-                </div>
-
-                <div class="social-login mb-4">
-                    <button class="btn btn-social">
-                        <img src="https://www.google.com/favicon.ico" width="16" alt="Google"> Google
-                    </button>
-                </div>
-
-                <p class="text-center mb-0" style="font-size: 0.9rem; color: var(--gray);">
+                <p class="text-center mt-4 mb-0" style="font-size: 0.9rem; color: var(--gray);">
                     Don't have an account? 
                     <a href="Register.php" style="color: var(--purple); font-weight: 700; text-decoration: none;">Register</a>
                 </p>
@@ -301,8 +241,8 @@ if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] == "POST") {
             <!-- Right Side: Logo/Branding -->
             <div class="login-side-logo">
                 <img src="CCSLogo.png" alt="CCS Logo">
-                <h4 class="mt-4 fw-bold text-white">CCS Sit-in Monitoring</h4>
-                <p class="text-white-50 text-center small px-4 mt-2">The official monitoring system for the College of Computer Studies.</p>
+                <h4 class="mt-4 fw-bold text-white text-center">College of Computer Studies</h4>
+                <p class="text-white-50 text-center small px-4 mt-2">Laboratory Sit-in Monitoring & Resource Management System</p>
                 
                 <div class="mt-auto pt-4 text-center">
                     <p class="small text-white-50 mb-0">&copy; 2026 University of Cebu</p>
