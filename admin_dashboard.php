@@ -111,19 +111,20 @@ if (isset($_POST['add_student_manual'])) {
     $sid   = trim($_POST['id_num']);
     $fn    = trim($_POST['first_name']);
     $ln    = trim($_POST['last_name']);
+    $mn    = trim($_POST['middle_name']);
     $em    = trim($_POST['email']);
     $crs   = trim($_POST['course']);
     $lvl   = (int)$_POST['level'];
     $adr   = trim($_POST['address']);
     $pwd   = password_hash($_POST['password'] ?: '123456', PASSWORD_DEFAULT);
     
-    $chk = $conn->prepare("SELECT IdNumber FROM students_info WHERE IdNumber = ?");
-    $chk->bind_param("s", $sid); $chk->execute();
+    $chk = $conn->prepare("SELECT IdNumber FROM students_info WHERE IdNumber = ? OR Email = ?");
+    $chk->bind_param("ss", $sid, $em); $chk->execute();
     if ($chk->get_result()->num_rows > 0) {
         header("Location: admin_dashboard.php?tab=students&error=exists");
     } else {
-        $s = $conn->prepare("INSERT INTO students_info (IdNumber, FirstName, LastName, Email, Course, CourseLevel, Address, Password, is_admin) VALUES (?,?,?,?,?,?,?,?,0)");
-        $s->bind_param("sssssiss", $sid, $fn, $ln, $em, $crs, $lvl, $adr, $pwd);
+        $s = $conn->prepare("INSERT INTO students_info (IdNumber, FirstName, LastName, MiddleName, Email, Course, CourseLevel, Address, Password, is_admin) VALUES (?,?,?,?,?,?,?,?,?,0)");
+        $s->bind_param("ssssssiss", $sid, $fn, $ln, $mn, $em, $crs, $lvl, $adr, $pwd);
         $s->execute(); $s->close();
         header("Location: admin_dashboard.php?tab=students&success=added");
     }
@@ -200,6 +201,7 @@ if (isset($_POST['do_sitin'])) {
     $sid     = trim($_POST['sitin_id']);
     $purpose = trim($_POST['sitin_purpose']);
     $lab     = trim($_POST['sitin_lab']);
+    $pc      = !empty($_POST['sitin_pc']) ? trim($_POST['sitin_pc']) : NULL;
     $date    = date('Y-m-d');
     $timein  = date('H:i:s');
     $chk2 = $conn->prepare("SELECT SessionID FROM sit_in_sessions WHERE StudentID=? AND Status='Active'");
@@ -208,8 +210,8 @@ if (isset($_POST['do_sitin'])) {
     if ($chk2->get_result()->num_rows > 0) {
         $sitin_error = "Student already has an active session.";
     } else {
-        $ins = $conn->prepare("INSERT INTO sit_in_sessions (StudentID, SessionDate, TimeIn, Purpose, Lab, Status) VALUES (?,?,?,?,?,'Active')");
-        $ins->bind_param("sssss", $sid, $date, $timein, $purpose, $lab);
+        $ins = $conn->prepare("INSERT INTO sit_in_sessions (StudentID, SessionDate, TimeIn, Purpose, Lab, PCNumber, Status) VALUES (?,?,?,?,?,?,'Active')");
+        $ins->bind_param("ssssss", $sid, $date, $timein, $purpose, $lab, $pc);
         $ins->execute(); $ins->close();
         header("Location: admin_dashboard.php?tab=sitin"); exit();
     }
@@ -386,6 +388,13 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
         .status-active { background: #e3fcef; color: #00a854; }
         .status-completed { background: #f4f5f7; color: #5e6c84; }
 
+        .lab-btn { border: 2px solid #eee; border-radius: 12px; background: white; padding: 10px 18px; font-weight: 800; font-size: 0.9rem; color: var(--text-main); transition: 0.2s; }
+        .lab-btn.active { background: var(--primary-purple); color: white; border-color: var(--primary-purple); }
+        .pc-item { width: 50px; height: 50px; border-radius: 15px; background: #e3fcef; color: #00a854; display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 1.1rem; cursor: pointer; transition: all 0.2s ease; border: 2px solid transparent; user-select: none; }
+        .pc-item:hover:not(.occupied) { transform: scale(1.1); background: var(--purple-soft); border-color: var(--primary-purple); }
+        .pc-item.occupied { background: #fee2e2; color: #b91c1c; cursor: help; }
+        .pc-item.selected { border: 3px solid var(--primary-purple); background: white; color: var(--primary-purple); box-shadow: 0 4px 15px rgba(92, 43, 122, 0.2); transform: scale(1.1); }
+
         .btn-action { background: var(--primary-purple); border: none; color: white; padding: 10px 18px; border-radius: 12px; font-weight: 700; font-size: 0.78rem; transition: 0.3s; }
         .btn-action:hover { transform: translateY(-2px); background: var(--purple-light); }
         .search-bar { background: #f1f3f5; border: 2px solid transparent; border-radius: 14px; padding: 10px 15px 10px 40px; color: var(--text-main); font-size: 0.88rem; width: 100%; font-weight: 600; }
@@ -424,7 +433,7 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
             <div class="vital-label mb-1">ADMIN ACCOUNT</div>
             <h1>
                 <?php
-                $titles = ['dashboard'=>'Overview','students'=>'Student List','sitin'=>'Live Monitor','sitinform'=>'Add Sit-in','reservations'=>'Reservations','announcements'=>'Announcements','records'=>'History','labs'=>'Labs','resources'=>'Lab Resources'];
+                $titles = ['dashboard'=>'Overview','students'=>'Student List','sitin'=>'Live Monitor','sitinform'=>'Add Sit-in','reservations'=>'Reservations','announcements'=>'Announcements','records'=>'History','leaderboard'=>'Leaderboard','labs'=>'Labs','resources'=>'Lab Resources'];
                 echo $titles[$active_tab] ?? 'Dashboard';
                 ?>
             </h1>
@@ -522,7 +531,72 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
     </div>
 
     <?php elseif ($active_tab === 'sitinform'): ?>
-    <div class="row justify-content-center"><div class="col-md-5"><div class="bento-card"><div class="card-title">Add Sit-in Entry</div><input type="text" id="studentLookup" class="search-bar mb-3" placeholder="Student name or ID..."><div id="searchResults" style="display:none;" class="mb-3"><div id="resultsList" class="d-flex flex-column gap-2"></div></div><form method="POST" id="sitinForm" style="display:none;"><?php csrf_input(); ?><input type="hidden" name="sitin_id" id="sitin_id"><div class="p-3 rounded-4 mb-3" style="background:var(--purple-soft);"><div class="vital-label">Selected Student</div><div id="display_name" class="fw-800"></div><div id="display_id" class="text-gold small fw-800"></div></div><div class="row g-2 mb-3"><div class="col-6"><label class="small fw-800">Purpose</label><select name="sitin_purpose" class="form-select"><option>C Programming</option><option>Java Programming</option><option>Research</option></select></div><div class="col-6"><label class="small fw-800">Lab</label><select name="sitin_lab" class="form-select"><?php $lb=$conn->query("SELECT LabName FROM labs"); while($l=$lb->fetch_assoc()) echo "<option>".$l['LabName']."</option>"; ?></select></div></div><button type="submit" name="do_sitin" class="btn-action w-100 py-3">START SESSION</button></form></div></div></div>
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="bento-card">
+                <div class="card-title">Add Sit-in Entry</div>
+                <input type="text" id="studentLookup" class="search-bar mb-3" placeholder="Search student name or ID...">
+                <div id="searchResults" style="display:none;" class="mb-3"><div id="resultsList" class="d-flex flex-column gap-2" style="max-height: 200px; overflow-y: auto;"></div></div>
+                
+                <form method="POST" id="sitinForm" style="display:none;">
+                    <?php csrf_input(); ?>
+                    <input type="hidden" name="sitin_id" id="sitin_id">
+                    <input type="hidden" name="sitin_date" id="sitin_date" value="<?= date('Y-m-d') ?>">
+                    
+                    <div class="p-3 rounded-4 mb-4 d-flex justify-content-between align-items-center" style="background:var(--purple-soft);">
+                        <div>
+                            <div class="vital-label">Selected Student</div>
+                            <div id="display_name" class="fw-800 fs-5" style="color: var(--primary-purple);"></div>
+                            <div id="display_id" class="text-gold small fw-800"></div>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline-secondary rounded-pill px-3 fw-bold" onclick="document.getElementById('sitinForm').style.display='none'; document.getElementById('studentLookup').value='';">Change</button>
+                    </div>
+
+                    <div class="row g-4">
+                        <div class="col-md-12">
+                            <label class="small fw-800 mb-2">Purpose</label>
+                            <select name="sitin_purpose" class="form-select w-50">
+                                <option>C Programming</option>
+                                <option>Java Programming</option>
+                                <option>Python Programming</option>
+                                <option>C++ Programming</option>
+                                <option>Web Development</option>
+                                <option>Database Management</option>
+                                <option>Networking</option>
+                                <option>Mobile Development</option>
+                                <option>Cybersecurity</option>
+                                <option>Data Science</option>
+                                <option>Research</option>
+                                <option>Examination</option>
+                                <option>Assignment</option>
+                                <option>Others</option>
+                            </select>
+                        </div>
+                        
+                        <div class="col-12">
+                            <label class="small fw-800 mb-2">Laboratory</label>
+                            <div class="d-flex gap-2 flex-wrap">
+                                <?php $lbq=$conn->query("SELECT * FROM labs"); while($lb=$lbq->fetch_assoc()): ?>
+                                    <button type="button" class="lab-btn" data-lab="<?= $lb['LabName'] ?>" data-total="<?= $lb['PCCount'] ?>">Lab <?= $lb['LabName'] ?></button>
+                                <?php endwhile; ?>
+                            </div>
+                            <input type="hidden" name="sitin_lab" id="sitin_lab_input" required>
+                            <input type="hidden" name="sitin_pc" id="sitin_pc_input">
+                        </div>
+
+                        <div id="labInfoArea" class="col-12 d-none">
+                            <div class="small fw-800 mb-2">Select PC Number</div>
+                            <div id="pcGrid" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(50px,1fr)); gap:8px;"></div>
+                        </div>
+
+                        <div class="col-12 mt-4">
+                            <button type="submit" name="do_sitin" class="btn-action w-100 py-3 fs-6">START SESSION</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
 
     <?php elseif ($active_tab === 'reservations'): ?>
     <div class="bento-card tile-wide">
@@ -574,6 +648,18 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
                     <?php endwhile; ?>
                 </tbody>
             </table>
+        </div>
+    </div>
+
+    <?php elseif ($active_tab === 'leaderboard'): ?>
+    <div class="bento-card tile-wide">
+        <div class="card-title">Sit-in Leaderboard (Top 50)</div>
+        <div class="p-3">
+            <p class="text-dim small mb-4 fw-600">Overview of student engagement across all laboratories. Rankings are calculated based on total cumulative lab hours and successful task completion.</p>
+            <?php
+            $leaderboard = getLeaderboardData($conn, 50);
+            displayLeaderboard($leaderboard, true);
+            ?>
         </div>
     </div>
 
@@ -752,24 +838,85 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
     <div class="modal fade" id="addLabModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header"><h5 class="fw-800">Add New Lab</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><form method="POST"><?php csrf_input(); ?><div class="modal-body"><div class="mb-2"><label class="small fw-800">Lab Name</label><input type="text" name="lab_name" class="form-control"></div><div class="mb-2"><label class="small fw-800">Total PCs</label><input type="number" name="lab_count" class="form-control"></div><div class="mb-2"><label class="small fw-800">Notes</label><textarea name="lab_desc_new" class="form-control"></textarea></div></div><div class="modal-footer border-0"><button type="submit" name="add_lab" class="btn-action w-100 py-3">Save Laboratory</button></div></form></div></div></div>
 
     <div class="modal fade" id="addStudentManualModal" tabindex="-1">
-        <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
             <div class="modal-content">
-                <div class="modal-header"><h5 class="fw-800">Manually Add Student</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                <div class="modal-header">
+                    <h5 class="fw-800">Manually Add Student</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
                 <form method="POST">
                     <?php csrf_input(); ?>
                     <div class="modal-body">
+                        <div class="field-group-label" style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1.5px; color: var(--primary-purple); font-weight: 700; margin: 0 0 15px; display: flex; align-items: center; gap: 10px;">
+                            Personal Information <div style="flex: 1; height: 1px; background: var(--purple-soft);"></div>
+                        </div>
+                        <div class="row g-3 mb-4">
+                            <div class="col-12">
+                                <label class="small fw-800">ID Number</label>
+                                <input type="text" name="id_num" class="form-control" placeholder="e.g. 23-1234-567" required>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="small fw-800">Last Name</label>
+                                <input type="text" name="last_name" class="form-control" placeholder="Last" required>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="small fw-800">First Name</label>
+                                <input type="text" name="first_name" class="form-control" placeholder="First" required>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="small fw-800">Middle Name</label>
+                                <input type="text" name="middle_name" class="form-control" placeholder="Optional">
+                            </div>
+                            <div class="col-12">
+                                <label class="small fw-800">Home Address</label>
+                                <input type="text" name="address" class="form-control" placeholder="Full address" required>
+                            </div>
+                        </div>
+
+                        <div class="field-group-label" style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1.5px; color: var(--primary-purple); font-weight: 700; margin: 0 0 15px; display: flex; align-items: center; gap: 10px;">
+                            Academic Details <div style="flex: 1; height: 1px; background: var(--purple-soft);"></div>
+                        </div>
+                        <div class="row g-3 mb-4">
+                            <div class="col-md-8">
+                                <label class="small fw-800">Course</label>
+                                <select name="course" class="form-select" required>
+                                    <option value="">Select Course</option>
+                                    <option>Information Technology</option>
+                                    <option>Computer Science</option>
+                                    <option>Computer Engineering</option>
+                                    <option>Data Science</option>
+                                    <option>Cybersecurity</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="small fw-800">Year Level</label>
+                                <select name="level" class="form-select" required>
+                                    <option value="">Select</option>
+                                    <option value="1">1st Year</option>
+                                    <option value="2">2nd Year</option>
+                                    <option value="3">3rd Year</option>
+                                    <option value="4">4th Year</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="field-group-label" style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1.5px; color: var(--primary-purple); font-weight: 700; margin: 0 0 15px; display: flex; align-items: center; gap: 10px;">
+                            Account Credentials <div style="flex: 1; height: 1px; background: var(--purple-soft);"></div>
+                        </div>
                         <div class="row g-3">
-                            <div class="col-12"><label class="small fw-800">ID Number</label><input type="text" name="id_num" class="form-control" placeholder="e.g. 21102345" required></div>
-                            <div class="col-6"><label class="small fw-800">First Name</label><input type="text" name="first_name" class="form-control" required></div>
-                            <div class="col-6"><label class="small fw-800">Last Name</label><input type="text" name="last_name" class="form-control" required></div>
-                            <div class="col-12"><label class="small fw-800">Email Address</label><input type="email" name="email" class="form-control" required></div>
-                            <div class="col-8"><label class="small fw-800">Course</label><input type="text" name="course" class="form-control" placeholder="e.g. BSIT" required></div>
-                            <div class="col-4"><label class="small fw-800">Year Level</label><input type="number" name="level" class="form-control" min="1" max="5" value="1" required></div>
-                            <div class="col-12"><label class="small fw-800">Home Address</label><input type="text" name="address" class="form-control"></div>
-                            <div class="col-12"><label class="small fw-800">Default Password (Optional)</label><input type="password" name="password" class="form-control" placeholder="Default: 123456"></div>
+                            <div class="col-12">
+                                <label class="small fw-800">Email Address</label>
+                                <input type="email" name="email" class="form-control" placeholder="name@example.com" required>
+                            </div>
+                            <div class="col-12">
+                                <label class="small fw-800">Password (Optional)</label>
+                                <input type="password" name="password" class="form-control" placeholder="Default: 123456">
+                            </div>
                         </div>
                     </div>
-                    <div class="modal-footer border-0"><button type="submit" name="add_student_manual" class="btn-action w-100 py-3">REGISTER STUDENT</button></div>
+                    <div class="modal-footer border-0">
+                        <button type="submit" name="add_student_manual" class="btn-action w-100 py-3">REGISTER STUDENT</button>
+                    </div>
                 </form>
             </div>
         </div>
@@ -840,7 +987,44 @@ function toggleEdit(id){let el=document.getElementById('editLab_'+id); el.style.
 function openEdit(id,f,l,c,v){document.getElementById('edit_id').value=id;document.getElementById('edit_first').value=f;document.getElementById('edit_last').value=l;document.getElementById('edit_course').value=c;document.getElementById('edit_level').value=v;new bootstrap.Modal(document.getElementById('editStudentModal')).show();}
 const search=document.getElementById('studentSearch'); if(search){search.oninput=function(){let q=this.value.toLowerCase();document.querySelectorAll('#studentTable tbody tr').forEach(tr=>tr.style.display=tr.innerText.toLowerCase().includes(q)?'':'none');};}
 const lookup=document.getElementById('studentLookup'); if(lookup){let db;lookup.oninput=function(){clearTimeout(db);const q=this.value.trim();if(q.length<2){document.getElementById('searchResults').style.display='none';return;}db=setTimeout(()=>{fetch('admin_dashboard.php?search_student='+encodeURIComponent(q)).then(r=>r.json()).then(data=>{const list=document.getElementById('resultsList');if(data.length===0)list.innerHTML='<div class="p-2 small">No matches.</div>';else list.innerHTML=data.map(s=>`<div class="p-3 rounded-4 bg-white border cursor-pointer" onclick="selectStudent('${s.IdNumber}','${s.FirstName}','${s.LastName}')"><div class="fw-800 text-gold">${s.FirstName} ${s.LastName}</div><div class="small text-dim">${s.IdNumber} • ${s.Course}</div></div>`).join('');document.getElementById('searchResults').style.display='block';});},300);};}
-function selectStudent(id,f,l){document.getElementById('sitin_id').value=id;document.getElementById('display_id').innerText=id;document.getElementById('display_name').innerText=f+' '+l;document.getElementById('searchResults').style.display='none';document.getElementById('studentLookup').value=f+' '+l;document.getElementById('sitinForm').style.display='block';}
+function selectStudent(id,f,l){document.getElementById('sitin_id').value=id;document.getElementById('display_id').innerText=id;document.getElementById('display_name').innerText=f+' '+l;document.getElementById('searchResults').style.display='none';document.getElementById('studentLookup').value='';document.getElementById('sitinForm').style.display='block';}
+
+document.querySelectorAll('.lab-btn').forEach(b=>b.onclick=function(){
+    document.querySelectorAll('.lab-btn').forEach(x=>x.classList.remove('active')); 
+    this.classList.add('active'); 
+    document.getElementById('sitin_lab_input').value=this.dataset.lab; 
+    document.getElementById('labInfoArea').classList.remove('d-none'); 
+    loadPCsAdmin(this.dataset.lab, document.getElementById('sitin_date').value);
+});
+
+function loadPCsAdmin(l,d){
+    const g=document.getElementById('pcGrid'); 
+    g.innerHTML='Loading...'; 
+    fetch(`student_dashboard.php?get_pcs=1&lab=${l}&date=${d}`).then(r=>r.json()).then(data=>{
+        g.innerHTML=''; 
+        const occupied = data.occupied || [];
+        const disabled = data.disabled || {};
+        for(let i=1;i<=data.total;i++){
+            const div=document.createElement('div');
+            const is_occupied = occupied.includes(i);
+            const is_disabled = disabled.hasOwnProperty(i);
+            
+            div.className = 'pc-item' + (is_occupied || is_disabled ? ' occupied' : '');
+            div.innerText = i;
+            
+            if(is_disabled) { div.title = 'Condition: ' + disabled[i]; div.style.cursor = 'help'; } 
+            else if(is_occupied) { div.title = 'Status: Currently Booked'; } 
+            else {
+                div.onclick=function(){
+                    g.querySelectorAll('.pc-item').forEach(p=>p.classList.remove('selected')); 
+                    this.classList.add('selected'); 
+                    document.getElementById('sitin_pc_input').value=i;
+                };
+            }
+            g.appendChild(div);
+        }
+    }); 
+}
 <?php if($active_tab==='dashboard'): ?>
 document.addEventListener('DOMContentLoaded',()=>{const ctx=document.getElementById('usageChart');if(ctx)new Chart(ctx,{type:'doughnut',data:{labels:<?=json_encode($purposes)?>,datasets:[{data:<?=json_encode($counts)?>,backgroundColor:['#5c2b7a','#c09412','#7b3da3','#d4a72c','#2D1B4E'],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,cutout:'75%',plugins:{legend:{position:'bottom',labels:{usePointStyle:true,font:{size:10}}}}}});});
 <?php endif; ?>
