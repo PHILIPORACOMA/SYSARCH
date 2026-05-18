@@ -1,4 +1,5 @@
 <?php
+session_start();
 include "db.php";
 
 if (isset($_SERVER["REQUEST_METHOD"]) && $_SERVER["REQUEST_METHOD"] == "POST") {
