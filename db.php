@@ -37,4 +37,25 @@ function verify_csrf_token($token) {
 function csrf_input() {
     echo '<input type="hidden" name="csrf_token" value="' . htmlspecialchars(get_csrf_token()) . '">';
 }
+
+/**
+ * Automatically manages sit-in sessions:
+ * 1. Activates 'Approved' reservations when the time arrives.
+ * 2. Completes 'Active' sessions from previous days.
+ */
+function auto_manage_sessions($conn) {
+    // 1. Activate approved reservations for today whose time has arrived
+    $conn->query("UPDATE sit_in_sessions 
+                  SET Status = 'Active' 
+                  WHERE Type = 'Reservation' 
+                    AND Status = 'Approved' 
+                    AND SessionDate = CURDATE() 
+                    AND TimeIn <= CURTIME()");
+
+    // 2. Auto-complete any 'Active' sessions from previous days (prevent zombies)
+    $conn->query("UPDATE sit_in_sessions 
+                  SET Status = 'Completed', TimeOut = '21:00:00' 
+                  WHERE Status = 'Active' 
+                    AND SessionDate < CURDATE()");
+}
 ?>

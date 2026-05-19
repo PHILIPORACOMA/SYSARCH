@@ -11,6 +11,9 @@ if (!isset($_SESSION['user_id'])) {
 include "db.php";
 include "leaderboard_helper.php";
 
+// Auto-manage sessions (activate reservations, etc.)
+auto_manage_sessions($conn);
+
 // ── CSRF Validation for all POST requests ──
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
     if (!verify_csrf_token($_POST['csrf_token'] ?? ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? ''))) {
@@ -128,14 +131,30 @@ if (isset($_POST['mark_notifications_read'])) {
     exit();
 }
 
+if (isset($_GET['check_session_status'])) {
+    header('Content-Type: application/json');
+    $q = $conn->query("SELECT COUNT(*) as c FROM sit_in_sessions WHERE StudentID='$id' AND Status='Active'");
+    echo json_encode(['active' => (int)$q->fetch_assoc()['c']]);
+    exit();
+}
+
 /* ── Fetch Data ── */
 $student = $conn->query("SELECT * FROM students_info WHERE IdNumber='$id'")->fetch_assoc();
 $unread_count = $conn->query("SELECT COUNT(*) as c FROM notifications WHERE StudentID='$id' AND IsRead=0")->fetch_assoc()['c'];
-$used_sessions = $conn->query("SELECT COUNT(*) as c FROM sit_in_sessions WHERE StudentID='$id' AND (Type='Sit-in' OR Type IS NULL)")->fetch_assoc()['c'];
+$used_sessions = $conn->query("SELECT COUNT(*) as c FROM sit_in_sessions WHERE StudentID='$id' AND Status IN ('Active','Completed')")->fetch_assoc()['c'];
 $max_credits = 30; $credits_left = max(0, 30 - $used_sessions); $credits_percent = round(($credits_left/30)*100); $credits_color = $credits_left > 15 ? '#198754' : ($credits_left > 5 ? '#c09412' : '#dc3545');
 
-$summary = $conn->query("SELECT COUNT(*) as sessions, COALESCE(SUM(TIMESTAMPDIFF(MINUTE, TimeIn, TimeOut)), 0) as mins, COALESCE(MAX(TIMESTAMPDIFF(MINUTE, TimeIn, TimeOut)), 0) as max_m FROM sit_in_sessions WHERE StudentID='$id' AND Status='Completed'")->fetch_assoc();
-$sum_hours = round($summary['mins']/60, 1); $max_fmt = $summary['max_m']>=60 ? floor($summary['max_m']/60).'h '.($summary['max_m']%60).'m' : $summary['max_m'].'m';
+$summary = $conn->query("SELECT COUNT(*) as total_logs, 
+                                COALESCE(SUM(TIMESTAMPDIFF(MINUTE, TimeIn, TimeOut)), 0) as total_mins, 
+                                COALESCE(MAX(TIMESTAMPDIFF(MINUTE, TimeIn, TimeOut)), 0) as peak_mins,
+                                COALESCE(AVG(TIMESTAMPDIFF(MINUTE, TimeIn, TimeOut)), 0) as avg_mins 
+                         FROM sit_in_sessions 
+                         WHERE StudentID='$id' AND Status IN ('Active','Completed')")->fetch_assoc();
+
+$sum_hours = round($summary['total_mins']/60, 1);
+$max_fmt = $summary['peak_mins']>=60 ? floor($summary['peak_mins']/60).'h '.($summary['peak_mins']%60).'m' : $summary['peak_mins'].'m';
+$avg_val = round($summary['avg_mins']);
+$avg_fmt = $avg_val >= 60 ? floor($avg_val/60).'h '.($avg_val%60).'m' : $avg_val.'m';
 
 // Fetch Purpose distribution for chart
 $purp_q = $conn->query("SELECT Purpose, COUNT(*) as count FROM sit_in_sessions WHERE StudentID='$id' GROUP BY Purpose");
@@ -156,12 +175,37 @@ while($p_row = $purp_q->fetch_assoc()) {
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-        :root { --primary-purple: #4a1d64; --purple-light: #632d8a; --purple-soft: #f3eaf9; --gold: #a67c0d; --bg-body: #f8f9fa; --bg-card: rgba(255, 255, 255, 0.8); --text-main: #1d2122; --text-dim: #454d4f; --card-radius: 24px; --shadow: 0 8px 32px rgba(31, 38, 135, 0.1); }
+        :root { 
+            --primary-purple: #4a1d64; 
+            --purple-light: #632d8a; 
+            --purple-soft: #f3eaf9; 
+            --gold: #a67c0d; 
+            --bg-body: #f8f9fa; 
+            --bg-card: rgba(255, 255, 255, 0.8); 
+            --text-main: #1d2122; 
+            --text-dim: #5f6368; /* Slightly darker for better light mode contrast */
+            --card-radius: 24px; 
+            --shadow: 0 8px 32px rgba(31, 38, 135, 0.1); 
+        }
+
         body { background-color: var(--bg-body); font-family: 'Inter', sans-serif; color: var(--text-main); margin: 0; min-height: 100vh; display: flex; font-size: 16px; line-height: 1.6; }
-        .dock-sidebar { width: 80px; background: var(--primary-purple); height: 100vh; position: fixed; left: 0; top: 0; display: flex; flex-direction: column; align-items: center; padding: 30px 0; z-index: 1000; box-shadow: 10px 0 30px rgba(0,0,0,0.1); transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        /* ── Dock Sidebar ── */
+        .dock-sidebar { 
+            width: 80px; background: var(--primary-purple); height: 100vh; position: fixed; left: 0; top: 0; 
+            display: flex; flex-direction: column; align-items: center; padding: 30px 0; z-index: 1000; 
+            box-shadow: 10px 0 30px rgba(0,0,0,0.1); transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1); 
+            overflow-y: auto; overflow-x: hidden;
+        }
+        .dock-sidebar::-webkit-scrollbar { width: 4px; }
+        .dock-sidebar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 10px; }
+        .dock-sidebar:hover::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.4); }
         .dock-sidebar:hover { width: 240px; }
-        .dock-logo { margin-bottom: 50px; }
-        .dock-logo img { width: 45px; }
+        .dock-logo { 
+            width: 78px; height: 78px; background: white; border-radius: 50%; 
+            display: flex; align-items: center; justify-content: center; 
+            margin-bottom: 40px; transition: 0.3s; box-shadow: 0 4px 12px rgba(0,0,0,0.18);
+        }
+        .dock-logo img { width: 60px; }
         .dock-nav { flex: 1; width: 100%; display: flex; flex-direction: column; gap: 12px; padding: 0 12px; }
         .dock-link { width: 100%; height: 55px; display: flex; align-items: center; text-decoration: none; color: rgba(255,255,255,0.85); border-radius: 14px; transition: 0.2s; overflow: hidden; white-space: nowrap; }
         .dock-link i { min-width: 56px; text-align: center; font-size: 1.4rem; }
@@ -229,6 +273,7 @@ while($p_row = $purp_q->fetch_assoc()) {
         <a href="#" class="dock-link" data-bs-toggle="modal" data-bs-target="#notifModal" onclick="markRead()"><i class="fa-solid fa-bell"></i><span>Alerts</span><?php if($unread_count>0): ?><div style="width:8px;height:8px;background:var(--gold);border-radius:50%;margin-left:auto;margin-right:15px;"></div><?php endif; ?></a>
         <a href="#" class="dock-link" data-bs-toggle="modal" data-bs-target="#histModal"><i class="fa-solid fa-history"></i><span>History</span></a>
         <a href="#" class="dock-link" data-bs-toggle="modal" data-bs-target="#leaderboardModal"><i class="fa-solid fa-trophy"></i><span>Leaderboard</span></a>
+
         <a href="#" class="dock-link" data-bs-toggle="modal" data-bs-target="#editModal"><i class="fa-solid fa-user-gear"></i><span>Settings</span></a>
     </nav>
     <form method="POST" action="logout.php" class="w-100 px-2"><?php csrf_input(); ?><button class="dock-link border-0 bg-transparent w-100 text-danger"><i class="fa-solid fa-power-off"></i><span>Logout</span></button></form>
@@ -237,7 +282,7 @@ while($p_row = $purp_q->fetch_assoc()) {
 <main class="main-wrapper">
     <div class="header-section">
         <div><div class="vital-label mb-1"><?= $student['Course'] ?> • Year <?= $student['CourseLevel'] ?></div><h1>My Dashboard</h1></div>
-        <div class="text-end"><div class="fw-800 small"><?= date('l, M d') ?></div><div class="small text-dim"><?= date('h:i A') ?></div></div>
+        <div class="text-end"><div class="fw-800 small" id="headerDate"><?= date('l, M d') ?></div><div class="small text-dim" id="headerTime"><?= date('h:i A') ?></div></div>
     </div>
 
     <div class="bento-grid">
@@ -265,8 +310,8 @@ while($p_row = $purp_q->fetch_assoc()) {
 
         <div class="bento-card tile-small"><div class="card-title">Total Hours</div><div class="vital-sign"><div class="vital-value"><?= $sum_hours ?></div><div class="vital-label">Lifetime</div></div></div>
         <div class="bento-card tile-small"><div class="card-title">Peak Session</div><div class="vital-sign"><div class="vital-value text-gold"><?= $max_fmt ?></div><div class="vital-label">Longest</div></div></div>
-        <div class="bento-card tile-small"><div class="card-title">History</div><div class="vital-sign"><div class="vital-value"><?= $summary['sessions'] ?></div><div class="vital-label">Total Logs</div></div></div>
-        <div class="bento-card tile-small"><div class="card-title">Average</div><div class="vital-sign"><div class="vital-value text-gold"><?= $max_fmt ?></div><div class="vital-label">Per Session</div></div></div>
+        <div class="bento-card tile-small"><div class="card-title">History</div><div class="vital-sign"><div class="vital-value"><?= $summary['total_logs'] ?></div><div class="vital-label">Total Logs</div></div></div>
+        <div class="bento-card tile-small"><div class="card-title">Average</div><div class="vital-sign"><div class="vital-value text-gold"><?= $avg_fmt ?></div><div class="vital-label">Per Session</div></div></div>
 
         <div class="bento-card tile-medium"><div class="card-title">Usage Analysis</div><div style="height:160px"><canvas id="usageChart"></canvas></div></div>
         
@@ -285,9 +330,11 @@ while($p_row = $purp_q->fetch_assoc()) {
                 <table class="glass-table">
                     <thead><tr><th>Purpose</th><th>Lab & PC</th><th>Time</th><th>Status</th><th class="text-end">Action</th></tr></thead>
                     <tbody>
-                        <?php $rs=$conn->query("SELECT * FROM sit_in_sessions WHERE StudentID='$id' AND (Type='Sit-in' OR Type IS NULL) ORDER BY SessionDate DESC LIMIT 5");
-                        while($s=$rs->fetch_assoc()): $st=strtolower($s['Status']); ?>
-                        <tr><td><div class="fw-800"><?= $s['Purpose']?:'General' ?></div><div class="small text-dim"><?= $s['SessionDate'] ?></div></td><td>Lab <?= $s['Lab'] ?> • PC <?= $s['PCNumber']?:'Any' ?></td><td><?= substr($s['TimeIn'],0,5) ?> - <?= $s['TimeOut']?substr($s['TimeOut'],0,5):'LIVE' ?></td><td><span class="status-badge <?= $st==='active'?'status-active':'status-completed' ?>"><?= $s['Status'] ?></span></td><td class="text-end"><?php if($st==='completed'): ?><button class="btn-action py-1 px-3" onclick="openFeedback(<?= $s['SessionID'] ?>,'<?= $s['SessionDate'] ?>')">Rate</button><?php endif; ?></td></tr>
+                        <?php $rs=$conn->query("SELECT * FROM sit_in_sessions WHERE StudentID='$id' AND Status IN ('Active','Completed') ORDER BY SessionDate DESC, TimeIn DESC LIMIT 5");
+                        while($s=$rs->fetch_assoc()): $st=strtolower($s['Status']); 
+                            $to = $s['TimeOut'] ? substr($s['TimeOut'],0,5) : ($st==='active' ? 'LIVE' : date('H:i', strtotime($s['TimeIn'] . ' + 3 hours')));
+                        ?>
+                        <tr><td><div class="fw-800"><?= $s['Purpose']?:'General' ?></div><div class="small text-dim"><?= $s['SessionDate'] ?></div></td><td>Lab <?= $s['Lab'] ?> • PC <?= $s['PCNumber']?:'Any' ?></td><td><?= substr($s['TimeIn'],0,5) ?> - <?= $to ?></td><td><span class="status-badge <?= $st==='active'?'status-active':'status-completed' ?>"><?= $s['Status'] ?></span></td><td class="text-end"><?php if($st==='completed'): ?><button class="btn-action py-1 px-3" onclick="openFeedback(<?= $s['SessionID'] ?>,'<?= $s['SessionDate'] ?>')">Rate</button><?php endif; ?></td></tr>
                         <?php endwhile; ?>
                     </tbody>
                 </table>
@@ -368,9 +415,10 @@ while($p_row = $purp_q->fetch_assoc()) {
                     </thead>
                     <tbody>
                         <?php 
-                        $ah = $conn->query("SELECT * FROM sit_in_sessions WHERE StudentID='$id' ORDER BY SessionDate DESC, TimeIn DESC");
+                        $ah = $conn->query("SELECT * FROM sit_in_sessions WHERE StudentID='$id' AND Status IN ('Active','Completed') ORDER BY SessionDate DESC, TimeIn DESC");
                         while($h = $ah->fetch_assoc()): 
                             $hst = strtolower($h['Status']); 
+                            $to = $h['TimeOut'] ? substr($h['TimeOut'],0,5) : ($hst==='active' ? 'LIVE' : date('H:i', strtotime($h['TimeIn'] . ' + 3 hours')));
                         ?>
                         <tr>
                             <td>
@@ -378,8 +426,8 @@ while($p_row = $purp_q->fetch_assoc()) {
                                 <div class="small text-dim"><?= $h['SessionDate'] ?></div>
                             </td>
                             <td>Lab <?= $h['Lab'] ?> • PC <?= $h['PCNumber'] ?: 'Any' ?></td>
-                            <td><?= $h['TimeIn'] ?></td>
-                            <td><?= $h['TimeOut'] ?: 'LIVE' ?></td>
+                            <td><?= substr($h['TimeIn'],0,5) ?></td>
+                            <td><?= $to ?></td>
                             <td><span class="status-badge <?= $hst === 'active' ? 'status-active' : 'status-completed' ?>"><?= $h['Status'] ?></span></td>
                         </tr>
                         <?php endwhile; ?>
@@ -486,9 +534,14 @@ function loadPCs(l,d){
             else if(is_occupied) { div.title = 'Status: Currently Booked'; } 
             else {
                 div.onclick=function(){
-                    g.querySelectorAll('.pc-item').forEach(p=>p.classList.remove('selected')); 
-                    this.classList.add('selected'); 
-                    document.getElementById('res_pc_input').value=i;
+                    if(this.classList.contains('selected')) {
+                        this.classList.remove('selected');
+                        document.getElementById('res_pc_input').value='';
+                    } else {
+                        g.querySelectorAll('.pc-item').forEach(p=>p.classList.remove('selected')); 
+                        this.classList.add('selected'); 
+                        document.getElementById('res_pc_input').value=i;
+                    }
                 };
             }
             g.appendChild(div);
@@ -511,6 +564,33 @@ function loadPCs(l,d){
 }
 function openFeedback(id,date){document.getElementById('fb_session_id').value=id; new bootstrap.Modal(document.getElementById('feedbackModal')).show();}
 function markRead(){fetch('',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'mark_notifications_read=1&csrf_token=<?=get_csrf_token()?>'});}
+
+// Real-time Clock
+function updateClock(){
+    const now = new Date();
+    const dateOpts = { weekday: 'long', month: 'short', day: '2-digit' };
+    const timeOpts = { hour: '2-digit', minute: '2-digit', hour12: true };
+    document.getElementById('headerDate').innerText = now.toLocaleDateString('en-US', dateOpts);
+    document.getElementById('headerTime').innerText = now.toLocaleTimeString('en-US', timeOpts);
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// Session Synchronization Polling
+let activeSessionCount = <?= $conn->query("SELECT COUNT(*) as c FROM sit_in_sessions WHERE StudentID='$id' AND Status='Active'")->fetch_assoc()['c'] ?>;
+
+setInterval(() => {
+    fetch('student_dashboard.php?check_session_status=1')
+        .then(response => response.json())
+        .then(data => {
+            if (data.active !== activeSessionCount) {
+                // Status changed remotely (e.g., admin logged them out), reload the page to update UI
+                window.location.reload();
+            }
+        })
+        .catch(err => console.error('Sync check failed', err));
+}, 5000); // Check every 5 seconds
+
 document.addEventListener('DOMContentLoaded',()=>{
     const ctx=document.getElementById('usageChart');
     if(ctx){

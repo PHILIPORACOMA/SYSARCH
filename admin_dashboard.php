@@ -11,6 +11,9 @@ if (!isset($_SESSION['user_id'])) {
 include "db.php";
 include "leaderboard_helper.php";
 
+// Auto-manage sessions (activate reservations, etc.)
+auto_manage_sessions($conn);
+
 // Check if admin
 $chk = $conn->prepare("SELECT is_admin FROM students_info WHERE IdNumber = ?");
 $chk->bind_param("s", $_SESSION['user_id']);
@@ -317,7 +320,6 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
         }
 
         body {
-            background-color: var(--bg-body);
             background-image: 
                 radial-gradient(at 0% 0%, rgba(92, 43, 122, 0.05) 0px, transparent 50%),
                 radial-gradient(at 100% 100%, rgba(192, 148, 18, 0.03) 0px, transparent 50%);
@@ -333,10 +335,19 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
             width: 80px; background: var(--primary-purple); height: 100vh; position: fixed; left: 0; top: 0;
             display: flex; flex-direction: column; align-items: center; padding: 30px 0; z-index: 1000;
             box-shadow: 10px 0 30px rgba(0,0,0,0.05); transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            overflow-y: auto; overflow-x: hidden;
         }
+        .dock-sidebar::-webkit-scrollbar { width: 4px; }
+        .dock-sidebar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 10px; }
+        .dock-sidebar:hover::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.4); }
         .dock-sidebar:hover { width: 240px; }
-        .dock-logo { margin-bottom: 50px; transition: 0.3s; }
-        .dock-logo img { width: 45px; filter: drop-shadow(0 4px 8px rgba(0,0,0,0.2)); }
+        .dock-logo { 
+            width: 72px; height: 72px; background: white; border-radius: 50%; 
+            display: flex; align-items: center; justify-content: center; 
+            margin-bottom: 40px; transition: 0.3s; box-shadow: 0 4px 12px rgba(0,0,0,0.18);
+            flex-shrink: 0;
+        }
+        .dock-logo img { width: 52px; height: auto; }
         .dock-nav { flex: 1; width: 100%; display: flex; flex-direction: column; gap: 12px; padding: 0 12px; }
         .dock-link {
             width: 100%; height: 50px; display: flex; align-items: center; text-decoration: none;
@@ -421,6 +432,7 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
         <a href="admin_dashboard.php?tab=announcements" class="dock-link <?= $active_tab==='announcements'?'active':'' ?>"><i class="fa-solid fa-bullhorn"></i><span>Announcements</span></a>
         <a href="admin_dashboard.php?tab=records" class="dock-link <?= $active_tab==='records'?'active':'' ?>"><i class="fa-solid fa-history"></i><span>History</span></a>
         <a href="admin_dashboard.php?tab=leaderboard" class="dock-link <?= $active_tab==='leaderboard'?'active':'' ?>"><i class="fa-solid fa-trophy"></i><span>Leaderboard</span></a>
+        <a href="admin_dashboard.php?tab=feedback" class="dock-link <?= $active_tab==='feedback'?'active':'' ?>"><i class="fa-solid fa-comment-dots"></i><span>Feedback</span></a>
         <a href="admin_dashboard.php?tab=labs" class="dock-link <?= $active_tab==='labs'?'active':'' ?>"><i class="fa-solid fa-flask"></i><span>Laboratories</span></a>
         <a href="admin_dashboard.php?tab=resources" class="dock-link <?= $active_tab==='resources'?'active':'' ?>"><i class="fa-solid fa-layer-group"></i><span>Resources</span></a>
     </nav>
@@ -433,14 +445,14 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
             <div class="vital-label mb-1">ADMIN ACCOUNT</div>
             <h1>
                 <?php
-                $titles = ['dashboard'=>'Overview','students'=>'Student List','sitin'=>'Live Monitor','sitinform'=>'Add Sit-in','reservations'=>'Reservations','announcements'=>'Announcements','records'=>'History','leaderboard'=>'Leaderboard','labs'=>'Labs','resources'=>'Lab Resources'];
+                $titles = ['dashboard'=>'Overview','students'=>'Student List','sitin'=>'Live Monitor','sitinform'=>'Add Sit-in','reservations'=>'Reservations','announcements'=>'Announcements','records'=>'History','leaderboard'=>'Leaderboard','feedback'=>'Feedbacks','labs'=>'Labs','resources'=>'Lab Resources'];
                 echo $titles[$active_tab] ?? 'Dashboard';
                 ?>
             </h1>
         </div>
         <div class="text-end">
-            <div class="fw-800 small"><?= date('l, M d') ?></div>
-            <div class="small text-dim"><?= date('h:i A') ?></div>
+            <div class="fw-800 small" id="headerDate"><?= date('l, M d') ?></div>
+            <div class="small text-dim" id="headerTime"><?= date('h:i A') ?></div>
         </div>
     </div>
 
@@ -486,11 +498,16 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
 
     <?php elseif ($active_tab === 'students'): ?>
     <div class="bento-card tile-wide">
-        <div class="card-title d-flex justify-content-between">
+        <div class="card-title d-flex justify-content-between align-items-center">
             <span>Student List</span>
-            <div class="d-flex gap-2 w-50 justify-content-end">
-                <input type="text" id="studentSearch" class="search-bar" placeholder="Search students..." style="max-width: 250px;">
-                <button class="btn-action" data-bs-toggle="modal" data-bs-target="#addStudentManualModal"><i class="fa fa-plus me-1"></i> Add Student</button>
+            <div class="d-flex gap-2">
+                <a href="export.php?type=csv&source=students" class="btn btn-sm btn-outline-secondary fw-700" target="_blank"><i class="fa fa-file-csv me-1"></i> CSV</a>
+                <a href="export.php?type=xls&source=students" class="btn btn-sm btn-outline-secondary fw-700" target="_blank"><i class="fa fa-file-excel me-1"></i> Excel</a>
+                <a href="export.php?type=pdf&source=students" class="btn btn-sm btn-outline-secondary fw-700" target="_blank"><i class="fa fa-file-pdf me-1"></i> PDF</a>
+                <div class="ms-2 d-flex gap-2">
+                    <input type="text" id="studentSearch" class="search-bar" placeholder="Search students..." style="max-width: 200px;">
+                    <button class="btn-action" data-bs-toggle="modal" data-bs-target="#addStudentManualModal"><i class="fa fa-plus me-1"></i> Add Student</button>
+                </div>
             </div>
         </div>
         
@@ -643,8 +660,10 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
             <table class="glass-table">
                 <thead><tr><th>Date</th><th>Student</th><th>Lab & PC</th><th>Purpose</th><th>Time Range</th><th>Status</th></tr></thead>
                 <tbody>
-                    <?php $rc=$conn->query("SELECT s.*,st.FirstName,st.LastName FROM sit_in_sessions s JOIN students_info st ON s.StudentID=st.IdNumber ORDER BY SessionDate DESC LIMIT 50"); while($r=$rc->fetch_assoc()): ?>
-                    <tr><td><?= $r['SessionDate'] ?></td><td><?= $r['FirstName'].' '.$r['LastName'] ?></td><td>Lab <?= $r['Lab'] ?> • PC <?= $r['PCNumber']?:'—' ?></td><td><?= $r['Purpose'] ?></td><td><?= substr($r['TimeIn'],0,5) ?> - <?= $r['TimeOut']?substr($r['TimeOut'],0,5):'LIVE' ?></td><td><span class="status-badge <?= strtolower($r['Status'])==='active'?'status-active':'status-completed' ?>"><?= $r['Status'] ?></span></td></tr>
+                    <?php $rc=$conn->query("SELECT s.*,st.FirstName,st.LastName FROM sit_in_sessions s JOIN students_info st ON s.StudentID=st.IdNumber ORDER BY SessionDate DESC LIMIT 50"); while($r=$rc->fetch_assoc()): 
+                        $to = $r['TimeOut'] ? substr($r['TimeOut'],0,5) : (strtolower($r['Status'])==='active' ? 'LIVE' : date('H:i', strtotime($r['TimeIn'] . ' + 3 hours')));
+                    ?>
+                    <tr><td><?= $r['SessionDate'] ?></td><td><?= $r['FirstName'].' '.$r['LastName'] ?></td><td>Lab <?= $r['Lab'] ?> • PC <?= $r['PCNumber']?:'—' ?></td><td><?= $r['Purpose'] ?></td><td><?= substr($r['TimeIn'],0,5) ?> - <?= $to ?></td><td><span class="status-badge <?= strtolower($r['Status'])==='active'?'status-active':'status-completed' ?>"><?= $r['Status'] ?></span></td></tr>
                     <?php endwhile; ?>
                 </tbody>
             </table>
@@ -660,6 +679,67 @@ $active_tab = $_GET['tab'] ?? 'dashboard';
             $leaderboard = getLeaderboardData($conn, 50);
             displayLeaderboard($leaderboard, true);
             ?>
+        </div>
+    </div>
+
+    <?php elseif ($active_tab === 'feedback'): ?>
+    <div class="bento-card tile-wide">
+        <div class="card-title d-flex justify-content-between">
+            <span>Student Feedback & Ratings</span>
+            <div class="vital-label">Latest Submissions</div>
+        </div>
+        <div class="glass-table-container">
+            <table class="glass-table">
+                <thead>
+                    <tr>
+                        <th>Student</th>
+                        <th>Session Details</th>
+                        <th>Rating</th>
+                        <th>Task</th>
+                        <th>Comment</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php 
+                    $fb_q = $conn->query("SELECT f.*, st.FirstName, st.LastName, s.Lab, s.SessionDate, s.Purpose, s.TaskCompleted 
+                                         FROM feedback f 
+                                         JOIN students_info st ON f.StudentID = st.IdNumber 
+                                         JOIN sit_in_sessions s ON f.SessionID = s.SessionID 
+                                         ORDER BY f.FeedbackID DESC LIMIT 50");
+                    if ($fb_q && $fb_q->num_rows > 0):
+                        while($f = $fb_q->fetch_assoc()):
+                    ?>
+                        <tr>
+                            <td>
+                                <div class="fw-800"><?= $f['FirstName'].' '.$f['LastName'] ?></div>
+                                <div class="text-dim small fw-600"><?= $f['StudentID'] ?></div>
+                            </td>
+                            <td>
+                                <div class="small fw-700">Lab <?= $f['Lab'] ?> • <?= $f['Purpose'] ?></div>
+                                <div class="text-dim small"><?= $f['SessionDate'] ?></div>
+                            </td>
+                            <td>
+                                <div class="text-gold">
+                                    <?php for($i=1; $i<=5; $i++) echo $i <= $f['Rating'] ? '<i class="fa-solid fa-star"></i>' : '<i class="fa-regular fa-star"></i>'; ?>
+                                </div>
+                            </td>
+                            <td>
+                                <?php 
+                                $tc = floatval($f['TaskCompleted']);
+                                if($tc >= 1) echo '<span class="badge bg-success-subtle text-success">Fully</span>';
+                                elseif($tc > 0) echo '<span class="badge bg-warning-subtle text-warning">Partially</span>';
+                                else echo '<span class="badge bg-danger-subtle text-danger">No</span>';
+                                ?>
+                            </td>
+                            <td style="max-width: 300px;">
+                                <div class="small fw-600"><?= htmlspecialchars($f['Message'] ?: 'No comment provided.') ?></div>
+                            </td>
+                        </tr>
+                    <?php endwhile; else: ?>
+                        <tr><td colspan="5" class="text-center py-5 text-dim">No student feedback found.</td></tr>
+                    <?php endif; ?>
+                </tbody>
+            </table>
         </div>
     </div>
 
@@ -988,6 +1068,17 @@ function openEdit(id,f,l,c,v){document.getElementById('edit_id').value=id;docume
 const search=document.getElementById('studentSearch'); if(search){search.oninput=function(){let q=this.value.toLowerCase();document.querySelectorAll('#studentTable tbody tr').forEach(tr=>tr.style.display=tr.innerText.toLowerCase().includes(q)?'':'none');};}
 const lookup=document.getElementById('studentLookup'); if(lookup){let db;lookup.oninput=function(){clearTimeout(db);const q=this.value.trim();if(q.length<2){document.getElementById('searchResults').style.display='none';return;}db=setTimeout(()=>{fetch('admin_dashboard.php?search_student='+encodeURIComponent(q)).then(r=>r.json()).then(data=>{const list=document.getElementById('resultsList');if(data.length===0)list.innerHTML='<div class="p-2 small">No matches.</div>';else list.innerHTML=data.map(s=>`<div class="p-3 rounded-4 bg-white border cursor-pointer" onclick="selectStudent('${s.IdNumber}','${s.FirstName}','${s.LastName}')"><div class="fw-800 text-gold">${s.FirstName} ${s.LastName}</div><div class="small text-dim">${s.IdNumber} • ${s.Course}</div></div>`).join('');document.getElementById('searchResults').style.display='block';});},300);};}
 function selectStudent(id,f,l){document.getElementById('sitin_id').value=id;document.getElementById('display_id').innerText=id;document.getElementById('display_name').innerText=f+' '+l;document.getElementById('searchResults').style.display='none';document.getElementById('studentLookup').value='';document.getElementById('sitinForm').style.display='block';}
+
+// Real-time Clock
+function updateClock(){
+    const now = new Date();
+    const dateOpts = { weekday: 'long', month: 'short', day: '2-digit' };
+    const timeOpts = { hour: '2-digit', minute: '2-digit', hour12: true };
+    document.getElementById('headerDate').innerText = now.toLocaleDateString('en-US', dateOpts);
+    document.getElementById('headerTime').innerText = now.toLocaleTimeString('en-US', timeOpts);
+}
+setInterval(updateClock, 1000);
+updateClock();
 
 document.querySelectorAll('.lab-btn').forEach(b=>b.onclick=function(){
     document.querySelectorAll('.lab-btn').forEach(x=>x.classList.remove('active')); 

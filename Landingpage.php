@@ -337,7 +337,7 @@ include "leaderboard_helper.php";
             <div class="col-md-3">
                 <div class="feature-card">
                     <div class="feature-icon"><i class="fa fa-shield-halved"></i></div>
-                    <h6>Secure Access</h6>
+                    <h6>Secure Access</h6>v
                     <p>Protected student accounts and administrative controls.</p>
                 </div>
             </div>
